@@ -1,3 +1,13 @@
 # Include project-wide components here
 
 # add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/MyComponent")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sim/SimDynamics/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sim/SimServoDriver/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sim/SimImu/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sim/SimGps/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sim/SimBaro/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sim/SimMag/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/FlightControl/StateEstimator/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/FlightControl/Controller/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/FlightControl/Autonomy/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Mavlink/MavlinkGateway/")

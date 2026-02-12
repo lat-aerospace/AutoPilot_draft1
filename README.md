@@ -1,30 +1,36 @@
 # AutoPilot — Fixed-Wing SITL Autopilot on F Prime
 
-An end-to-end autopilot software environment built on NASA JPL's F Prime (F') framework. A Python script captures WASD keyboard input as RC stick commands, sends them over UDP to the flight software. Inside F Prime: RC input → control laws → actuator commands → 6-DOF physics sim → simulated sensors → EKF state estimation → telemetry to GDS. Monitor aircraft kinematics in real-time via fprime-gds.
+An end-to-end fixed-wing autopilot SITL environment built on NASA JPL's F Prime (F') framework. Connects to **QGroundControl (QGC)** via **MAVLink v2 over UDP** for joystick control (FBWB mode) and autonomous waypoint following (Auto mode). Inside F Prime: MAVLink gateway → autonomy → flight controller (TECS/L1/PID) → 6-DOF physics sim → simulated sensors → state estimation → telemetry back to QGC. Monitor in real-time via QGC and/or fprime-gds.
 
 This is the foundation that will later grow into the full autopilot with hardware layers (STM32H7).
+
+> **Current status:** See [`STATUS.md`](STATUS.md) for detailed phase-by-phase progress and known issues.
 
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────┐       UDP (localhost:5010)       ┌──────────────────────────────────────┐
-│  Python RC Script   │ ──────────────────────────────>  │  F Prime SITL Deployment             │
-│  (WASD keyboard)    │                                  │                                      │
-│  ~40 lines          │                                  │  Drv.Udp ──> RcInput                 │
-└─────────────────────┘                                  │      │                               │
-                                                         │      v                               │
-                                                         │  RcInput ──────> AttitudeController  │
+┌─────────────────────┐     UDP MAVLink (14550/14540)    ┌──────────────────────────────────────┐
+│  QGroundControl     │ <────────────────────────────>   │  F Prime SITL Deployment             │
+│  (GCS)              │  joystick, missions, telemetry   │                                      │
+│  - Joystick (FBWB)  │                                  │  MavlinkGateway (active, UDP)        │
+│  - Mission (Auto)   │                                  │      │                               │
+│  - Telemetry view   │                                  │      v                               │
+└─────────────────────┘                                  │  Autonomy (mode manager + guidance)  │
+                                                         │      │                               │
+┌─────────────────────┐       TCP (localhost:5000)       │      v                               │
+│  fprime-gds         │ <─────────────────────────────>  │  Controller (TECS + L1 + PIDs)       │
+│  (F Prime debug)    │                                  │      │                               │
+└─────────────────────┘                                  │      v                               │
+                                                         │  SimServoDriver ──> SimDynamics      │
                                                          │                      │               │
-┌─────────────────────┐       TCP (localhost:5000)       │                      v               │
-│  fprime-gds         │ <─────────────────────────────>  │  SimServoDriver ──> SimDynamics      │
-│  (telemetry viewer) │                                  │                      │               │
-└─────────────────────┘                                  │      ┌──────────────┘               │
+                                                         │      ┌──────────────┘               │
                                                          │      v                               │
-                                                         │  SimSensors ──> StateEstimator       │
-                                                         │                      │               │
-                                                         │              telemetry to GDS        │
+                                                         │  SimSensors ──> StateEstimator ──┐   │
+                                                         │      ↑ (feedback to Autonomy,    │   │
+                                                         │      │  Controller, MavlinkGW)   │   │
+                                                         │      └───────────────────────────┘   │
                                                          └──────────────────────────────────────┘
 ```
 
@@ -92,6 +98,9 @@ AircraftState  { position_ned: Vec3, velocity_ned: Vec3, attitude_quat: Quat,
                  euler_deg: Vec3, angular_rate_dps: Vec3, airspeed_ms: F64, time_s: F64 }
 SurfaceCmd     { aileron: F64, elevator: F64, rudder: F64, throttle: F64 }
 RcChannels     { roll: F32, pitch: F32, yaw: F32, throttle: F32 }
+FlightMode     enum { FBWB, AUTO }
+GuidanceCmd    { desired_alt_m: F64, desired_airspeed_ms: F64, desired_heading_deg: F64 }
+MissionWaypoint { seq: U16, lat_deg: F64, lon_deg: F64, alt_msl_m: F32, speed_ms: F32 }
 ```
 
 ### Custom FPP Ports (`AP/Ports/ApPorts.fpp`)
@@ -104,21 +113,27 @@ MagPort(ref data: MagData)
 StatePort(ref state: AircraftState)
 SurfaceCmdPort(ref cmd: SurfaceCmd)
 RcPort(ref rc: RcChannels)
+ModePort(mode: FlightMode)
+GuidanceCmdPort(ref cmd: GuidanceCmd)
+MissionWaypointPort(ref wp: MissionWaypoint)
 ```
 
 ### Component Table
 
 | # | Component | Type | Rate | Purpose |
 |---|-----------|------|------|---------|
-| 1 | **RcInput** | passive | 50Hz | Receives UDP bytes from `Drv.Udp`, deserializes into `RcChannels`, outputs on `RcPort` |
-| 2 | **AttitudeController** | queued | 100Hz | PID inner/outer loops (roll/pitch/yaw). RC sticks → desired attitude angles, outputs `SurfaceCmd` |
-| 3 | **SimServoDriver** | passive | 100Hz | Receives `SurfaceCmd`, stores it for `SimDynamics` to read |
-| 4 | **SimDynamics** | queued | 400Hz | 6-DOF rigid body sim (RK4). Reads surface commands, integrates EOM, outputs truth state |
-| 5 | **SimImu** | queued | 400Hz | Reads truth state, adds noise/bias, outputs `ImuData` |
-| 6 | **SimGps** | queued | 10Hz | Reads truth state, adds noise + latency, outputs `GpsData` |
-| 7 | **SimBaro** | queued | 50Hz | Reads truth state, adds noise, outputs `BaroData` |
-| 8 | **SimMag** | queued | 50Hz | Reads truth state, adds distortion, outputs `MagData` |
-| 9 | **StateEstimator** | queued | 100Hz | EKF fusing IMU/GPS/Baro/Mag → outputs estimated `AircraftState` |
+| 1 | **MavlinkGateway** | active | recv thread + 10Hz | UDP socket, MAVLink v2 encode/decode, heartbeat (1Hz), telemetry to QGC, forwards RC/mode/mission downstream |
+| 2 | **Autonomy** | queued | 10Hz | Mode state machine (FBWB/Auto). FBWB: sticks → GuidanceCmd. Auto: waypoints + state → GuidanceCmd. Always outputs `GuidanceCmd` |
+| 3 | **Controller** | queued | 100Hz | Full flight controller: TECS (alt+speed → pitch+throttle), L1 (heading → roll), rate PIDs → `SurfaceCmd` |
+| 4 | **StateEstimator** | queued | 100Hz | Complementary filter (upgradeable to EKF): IMU/GPS/Baro/Mag → estimated `AircraftState` |
+| 5 | **SimServoDriver** | passive | on-call | Receives `SurfaceCmd`, forwards to `SimDynamics` |
+| 6 | **SimDynamics** | queued | 400Hz | 6-DOF rigid body sim (forward Euler). Reads surface commands, integrates EOM, outputs truth state |
+| 7 | **SimImu** | queued | 400Hz | Reads truth state, adds noise, outputs `ImuData` |
+| 8 | **SimGps** | queued | 10Hz | Reads truth state, adds noise, outputs `GpsData` |
+| 9 | **SimBaro** | queued | 50Hz | Reads truth state, adds noise, outputs `BaroData` |
+| 10 | **SimMag** | queued | 100Hz | Reads truth state, adds noise, outputs `MagData` |
+
+**Linear data chain**: MavlinkGateway → Autonomy → Controller → SimServoDriver → SimDynamics → SimSensors → StateEstimator → (feedback to Autonomy, Controller, MavlinkGateway)
 
 Queued components receive cross-rate-group data on **async input ports** (thread-safe message queue). On `schedIn`, they call `doDispatch()` to drain queued messages, then run their algorithm. This avoids race conditions between rate group threads.
 
@@ -127,11 +142,10 @@ Queued components receive cross-rate-group data on **async input ports** (thread
 - `Svc.LinuxTimer` — 400Hz base tick (2.5ms)
 - `Svc.RateGroupDriver` — divides into rate groups
 - `Svc.ActiveRateGroup` x4 — RG1-RG4
-- `Drv.Udp` — receives RC input on port 5010
 - `Svc.PosixTime` — timestamps
 - CdhCore subtopology — command dispatch, events, health
 - ComCcsds subtopology — GDS communication framing
-- `Drv.TcpClient` — GDS link on port 5000
+- `Drv.TcpClient` — GDS link on port 5000 (runs in parallel with QGC)
 
 ---
 
@@ -142,56 +156,59 @@ Queued components receive cross-rate-group data on **async input ports** (thread
 | Rate Group | Freq | Divisor | Members (execution order) |
 |------------|------|---------|---------------------------|
 | RG1 | 400Hz | 1 | SimDynamics, SimImu |
-| RG2 | 100Hz | 4 | StateEstimator, AttitudeController, SimServoDriver |
-| RG3 | 50Hz | 8 | RcInput, SimBaro, SimMag |
-| RG4 | 10Hz | 40 | SimGps, health, telemetry downlink |
+| RG2 | 100Hz | 4 | SimMag, CDH services, StateEstimator, Controller |
+| RG3 | 50Hz | 8 | SimBaro, SystemResources |
+| RG4 | 10Hz | 40 | SimGps, Health, BufferManager, Autonomy, MavlinkGateway |
 
 ---
 
 ## Closed-Loop Data Flow
 
-Each tick, components execute in order within their rate group:
-
 ```
 RG1 (400Hz):
   SimDynamics.schedIn → doDispatch() drains queued SurfaceCmd
-                      → integrates 6-DOF by dt=2.5ms → outputs truth state
+                      → forward Euler integrate 6-DOF by dt=2.5ms
+                      → outputs truth state to all sim sensors
+
   SimImu.schedIn      → doDispatch() drains queued truth state
                       → adds noise → outputs ImuData
 
 RG2 (100Hz):
-  StateEstimator.schedIn      → doDispatch() drains queued ImuData/GpsData/BaroData/MagData
-                               → runs EKF predict+update → outputs AircraftState
-  AttitudeController.schedIn  → doDispatch() drains queued RcChannels + AircraftState
-                               → RC sticks map to desired attitude angles
-                               → PID compute → outputs SurfaceCmd
-  SimServoDriver.schedIn      → reads SurfaceCmd, stores for SimDynamics
+  SimMag.schedIn          → truth state + noise → MagData
+  StateEstimator.schedIn  → drains IMU/GPS/Baro/Mag queues
+                          → complementary filter → outputs estimated AircraftState
+                          → fan-out to Controller, Autonomy, MavlinkGateway
+  Controller.schedIn      → drains GuidanceCmd + AircraftState
+                          → TECS (alt+speed → pitch+throttle)
+                          → L1 (heading → roll)
+                          → rate PIDs → SurfaceCmd → SimServoDriver
 
 RG3 (50Hz):
-  RcInput.schedIn     → checks Drv.Udp for new data → outputs RcChannels
-  SimBaro.schedIn     → doDispatch() drains queued truth state → outputs BaroData
-  SimMag.schedIn      → doDispatch() drains queued truth state → outputs MagData
+  SimBaro.schedIn  → truth state + noise → BaroData
 
 RG4 (10Hz):
-  SimGps.schedIn      → doDispatch() drains queued truth state → outputs GpsData
+  SimGps.schedIn          → truth state + noise → GpsData
+  Autonomy.schedIn        → drains RC/mode/waypoint/state queues
+                          → FBWB: sticks → GuidanceCmd
+                          → Auto: waypoints + state → GuidanceCmd
+  MavlinkGateway.schedIn  → packs HEARTBEAT + ATTITUDE + GPS + VFR_HUD
+                          → sends to QGC via UDP
 ```
 
-**Loop closure**: SimDynamics (RG1) reads `SurfaceCmd` written by SimServoDriver (RG2) in the previous cycle. One-cycle latency is realistic and acceptable.
+**Linear chain**: MavlinkGateway → Autonomy → Controller → ServoDriver → SimDynamics
+**Loop closure**: SimDynamics (RG1) reads `SurfaceCmd` from Controller (RG2) in the previous cycle. One-cycle latency is realistic.
 
 ---
 
 ## SimDynamics 6-DOF Engine
 
-Pure C++ classes (no F Prime dependency in the math):
+Pure C++ class (no F Prime dependency in the math):
 
 | Class | Purpose |
 |-------|---------|
-| `RigidBody6DOF` | 13-state vector [pos_NED(3), vel_body(3), quat(4), omega_body(3)]. RK4 integration. |
-| `AeroModel` | Forces & moments from alpha, beta, airspeed, rates, surfaces. Cessna 172-class stability derivatives. |
-| `PropModel` | Thrust = f(throttle, airspeed). Simple first-order. |
-| `AtmosphereModel` | ISA standard atmosphere: density, pressure, temperature vs altitude. |
+| `RigidBody6DOF` | 13-state vector [pos_NED(3), vel_body(3), quat(4), omega_body(3)]. Forward Euler integration. Inline force/moment model with ~12 tunable constants in `SimpleAircraftParams`. |
 
-The `SimDynamics` F Prime component wraps these classes, calling `RigidBody6DOF::step(dt)` on each `schedIn`.
+The `SimDynamics` F Prime component wraps this class, calling `RigidBody6DOF::step(dt)` on each `schedIn`. Swap in real aero derivatives later without changing the F Prime wiring.
 
 ---
 
@@ -208,41 +225,57 @@ The `SimDynamics` F Prime component wraps these classes, calling `RigidBody6DOF:
 
 ---
 
-## State Estimator (EKF)
+## State Estimator
 
-**15-state vector**: position_NED(3), velocity_NED(3), attitude_euler(3), gyro_bias(3), accel_bias(3)
+Starts as a **complementary filter** (upgradeable to 15-state EKF later):
+- **Gyro integration** (100Hz): Attitude propagation from IMU angular rates
+- **GPS correction** (10Hz): Position + velocity
+- **Baro correction** (50Hz): Altitude
+- **Mag correction** (100Hz): Heading
 
-- **Predict** (100Hz): Propagate with IMU (strapdown integration)
-- **GPS update** (10Hz): Position + velocity measurement
-- **Baro update** (50Hz): Altitude measurement
-- **Mag update** (50Hz): Heading measurement
-
-Uses Eigen for matrix math.
-
----
-
-## Attitude Controller
-
-**Outer loop** (angle): PID on roll_error, pitch_error → rate commands
-**Inner loop** (rate): PID on roll_rate_error, pitch_rate_error, yaw_rate_error → surface deflections
-
-RC stick maps to desired attitude angles (roll: +/-45 deg, pitch: +/-20 deg).
-Controller computes PID to track commanded angles. Throttle passes through directly.
+Uses Eigen for math. Outputs estimated `AircraftState` fanned out to Controller, Autonomy, and MavlinkGateway.
 
 ---
 
-## Python RC Script (`tools/rc_input.py`)
+## Controller
 
-~40 lines. Uses `curses` + `socket`:
+Single component containing the full flight control system:
 
-```
-W → pitch stick forward (nose down)     S → pitch stick back (nose up)
-A → roll stick left                      D → roll stick right
-Q → yaw left                             E → yaw right
-Shift+W / Shift+S → throttle up/down
-```
+- **TECS** (Total Energy Control System): altitude error + airspeed error → pitch command + throttle command
+- **L1 Navigation**: heading error → roll command (bank angle for coordinated turn)
+- **Rate PIDs**: desired roll/pitch/yaw rates → aileron/elevator/rudder surface deflections
 
-Sends a 16-byte UDP packet (4x float32: roll, pitch, yaw, throttle) to `localhost:5010` at ~50Hz.
+**Input**: `GuidanceCmd { desired_alt_m, desired_airspeed_ms, desired_heading_deg }` + estimated `AircraftState`
+**Output**: `SurfaceCmd { aileron, elevator, rudder, throttle }`
+
+Controller does not know about flight modes — it always receives the same `GuidanceCmd` format from Autonomy.
+
+---
+
+## Autonomy
+
+Mode state machine + guidance logic in a single component. Always in the data path.
+
+**Modes:**
+- **FBWB**: Maps QGC joystick sticks to `GuidanceCmd` (pitch → desired altitude rate, roll → desired heading rate, throttle → desired airspeed)
+- **Auto**: Computes `GuidanceCmd` from waypoint list + estimated state (bearing to next waypoint → desired heading, waypoint alt → desired alt, waypoint speed → desired airspeed)
+
+Receives mode change requests from MavlinkGateway. Broadcasts current mode back to MavlinkGateway (for HEARTBEAT).
+
+---
+
+## MAVLink / QGC Integration
+
+**MavlinkGateway** is an active component with its own thread for UDP recv.
+
+- **Protocol**: MAVLink v2, `common` message set
+- **UDP**: Send to QGC on `127.0.0.1:14550`, receive on `0.0.0.0:14540`
+- **Heartbeat**: 1Hz (sysid=1, compid=1, type=FIXED_WING)
+- **Telemetry out** (10Hz): ATTITUDE, GLOBAL_POSITION_INT, VFR_HUD, SYS_STATUS
+- **Commands in**: MANUAL_CONTROL (joystick), SET_MODE, MISSION_ITEM_INT
+- **Library**: `mavlink/c_library_v2` (header-only, git submodule under `lib/mavlink`)
+
+Compatible with **MissionPlanner** and **QGroundControl** — both speak MAVLink v2 on UDP 14550. fprime-gds (TCP/CCSDS on port 5000) runs in parallel.
 
 ---
 
@@ -250,7 +283,7 @@ Sends a 16-byte UDP packet (4x float32: roll, pitch, yaw, throttle) to `localhos
 
 ```
 AP/
-├── CMakeLists.txt                          # extends existing: adds Types, Ports, Math, Components, Top/Sitl
+├── CMakeLists.txt
 ├── Types/
 │   ├── CMakeLists.txt
 │   └── ApTypes.fpp
@@ -260,51 +293,39 @@ AP/
 ├── Math/
 │   ├── CMakeLists.txt
 │   ├── ApMath.hpp                          # Eigen typedefs, scalar aliases
-│   └── CoordTransforms.hpp/cpp             # NED<->LLA, DCM from euler
+│   └── CoordTransforms.hpp                 # NED<->LLA, DCM from euler
 ├── Components/
-│   ├── CMakeLists.txt                      # includes all subdirs
-│   ├── RcInput/
-│   │   ├── CMakeLists.txt
-│   │   ├── RcInput.fpp
-│   │   ├── RcInput.hpp
-│   │   └── RcInput.cpp
-│   ├── AttitudeController/
-│   │   ├── CMakeLists.txt
-│   │   ├── AttitudeController.fpp
-│   │   ├── AttitudeController.hpp
-│   │   ├── AttitudeController.cpp
-│   │   ├── PID.hpp
-│   │   └── PID.cpp
-│   ├── StateEstimator/
-│   │   ├── CMakeLists.txt
-│   │   ├── StateEstimator.fpp
-│   │   ├── StateEstimator.hpp
-│   │   └── StateEstimator.cpp
+│   ├── CMakeLists.txt
+│   ├── Mavlink/
+│   │   └── MavlinkGateway/
+│   │       ├── CMakeLists.txt
+│   │       ├── MavlinkGateway.fpp, .hpp, .cpp
+│   ├── FlightControl/
+│   │   ├── Autonomy/
+│   │   │   ├── CMakeLists.txt
+│   │   │   ├── Autonomy.fpp, .hpp, .cpp
+│   │   ├── Controller/
+│   │   │   ├── CMakeLists.txt
+│   │   │   ├── Controller.fpp, .hpp, .cpp
+│   │   └── StateEstimator/
+│   │       ├── CMakeLists.txt
+│   │       ├── StateEstimator.fpp, .hpp, .cpp
 │   └── Sim/
 │       ├── SimDynamics/
 │       │   ├── CMakeLists.txt
-│       │   ├── SimDynamics.fpp
-│       │   ├── SimDynamics.hpp
-│       │   ├── SimDynamics.cpp
-│       │   ├── RigidBody6DOF.hpp/cpp
-│       │   ├── AeroModel.hpp/cpp
-│       │   ├── PropModel.hpp/cpp
-│       │   └── AtmosphereModel.hpp/cpp
-│       ├── SimImu/
+│       │   ├── SimDynamics.fpp, .hpp, .cpp
+│       │   └── RigidBody6DOF.hpp/cpp
+│       ├── SimServoDriver/
 │       │   ├── CMakeLists.txt
+│       │   ├── SimServoDriver.fpp, .hpp, .cpp
+│       ├── SimImu/
 │       │   ├── SimImu.fpp, .hpp, .cpp
 │       ├── SimGps/
-│       │   ├── CMakeLists.txt
 │       │   ├── SimGps.fpp, .hpp, .cpp
 │       ├── SimBaro/
-│       │   ├── CMakeLists.txt
 │       │   ├── SimBaro.fpp, .hpp, .cpp
-│       ├── SimMag/
-│       │   ├── CMakeLists.txt
-│       │   ├── SimMag.fpp, .hpp, .cpp
-│       └── SimServoDriver/
-│           ├── CMakeLists.txt
-│           ├── SimServoDriver.fpp, .hpp, .cpp
+│       └── SimMag/
+│           ├── SimMag.fpp, .hpp, .cpp
 ├── Top/
 │   └── Sitl/
 │       ├── CMakeLists.txt
@@ -313,14 +334,11 @@ AP/
 │       ├── topology.fpp
 │       ├── SitlTopology.cpp
 │       └── SitlTopologyDefs.hpp
-tools/
-└── rc_input.py                             # Python keyboard RC script
+lib/
+├── eigen/                                  # git submodule (Eigen 3.4, header-only)
+├── fprime/                                 # git submodule (F Prime v4.1.1)
+└── mavlink/                                # git submodule (c_library_v2, header-only)
 ```
-
-### Top-level additions
-
-- `lib/eigen/` — git submodule (Eigen 3.4, header-only)
-- `CMakePresets.json` — add `sitl` preset
 
 ---
 
@@ -364,36 +382,26 @@ target_link_libraries(${MODULE_NAME} PUBLIC eigen)
 ## Implementation Phases
 
 ### Phase 1: Skeleton — Types, Ports, Rate Groups, GDS Link
-1. Add Eigen git submodule
+1. Add Eigen git submodule, create Math library
 2. Create `AP/Types/ApTypes.fpp` with all data types
 3. Create `AP/Ports/ApPorts.fpp` with all custom ports
-4. Create `AP/Math/` with Eigen wrappers and coordinate transforms
-5. Create `AP/Top/Sitl/` deployment: wire LinuxTimer → RateGroupDriver → 4 ActiveRateGroups + CdhCore + ComCcsds subtopologies
-6. Add `sitl` build preset
-7. **Verify**: Build, run, connect GDS, see rate group telemetry ticking
+4. Create `AP/Top/Sitl/` deployment: LinuxTimer → RateGroupDriver → 4 RGs + CdhCore + ComCcsds
+5. **Verify**: Build, run, connect GDS, see rate group telemetry ticking
 
 ### Phase 2: Simulation — 6-DOF + Sim Sensors
-1. Implement `SimDynamics` with RigidBody6DOF, AeroModel, PropModel, AtmosphereModel
-2. Implement SimImu, SimGps, SimBaro, SimMag, SimServoDriver
-3. Wire into topology, send constant surface deflection via GDS command on SimServoDriver
-4. **Verify**: Aircraft state telemetry shows realistic motion (pitch up when elevator applied, etc.)
+1. Implement RigidBody6DOF (pure C++ math, forward Euler, ~12 tunable constants)
+2. Implement SimDynamics, SimServoDriver, SimImu, SimGps, SimBaro, SimMag
+3. Wire into topology
+4. **Verify**: Aircraft state telemetry shows realistic motion in GDS
 
-### Phase 3: RC Input
-1. Implement `RcInput` component (deserializes UDP → RcChannels)
-2. Write `tools/rc_input.py`
-3. Wire Drv.Udp + RcInput → AttitudeController
-4. **Verify**: Press WASD keys → aircraft responds in real-time in GDS telemetry
-
-### Phase 4: State Estimation
-1. Implement `StateEstimator` (15-state EKF using Eigen)
-2. Wire sensor outputs → StateEstimator → telemetry
-3. **Verify**: Estimated state tracks truth state (compare in GDS)
-
-### Phase 5: Attitude Control (Closed Loop)
-1. Implement PID utility class
-2. Implement `AttitudeController`
-3. Wire: StateEstimator + RcInput → AttitudeController → SimServoDriver
-4. **Verify**: WASD commands desired attitudes. Aircraft holds stable. Release keys → returns to level flight.
+### Phase 3: Flight Control + QGC Integration
+1. **3a — Foundation**: Add FlightMode/GuidanceCmd/MissionWaypoint types, MAVLink submodule
+2. **3b — StateEstimator**: Complementary filter, wire sensors → estimator → state fan-out
+3. **3c — Controller**: TECS + L1 + PIDs, wire estimator → controller → servo driver
+4. **3d — MavlinkGateway (telemetry out)**: POSIX UDP, heartbeat + telemetry → QGC sees aircraft
+5. **3e — Autonomy + FBWB**: Mode manager, stick mapping, QGC joystick → aircraft flies
+6. **3f — Auto mode**: Waypoint storage, path guidance, mission protocol
+7. **Verify**: QGC joystick in FBWB, upload mission in Auto, fprime-gds works in parallel
 
 ---
 
@@ -412,26 +420,33 @@ target_link_libraries(${MODULE_NAME} PUBLIC eigen)
 
 ---
 
-## Notes
+## Verification (End-to-End)
 
-Keep in mind to use the venv: `source ../venvs/fprime311/bin/activate`
+1. Terminal 1: `fprime-util build && ./build-fprime-automatic-native/bin/AP_Top -a 0.0.0.0 -p 5000`
+2. Terminal 2 (optional): `fprime-gds --dictionary build-artifacts/Linux/AP_Top/dict/SitlTopologyDictionary.json`
+3. Launch QGroundControl — should see heartbeat, aircraft on map, attitude indicator
+4. Connect joystick in QGC → FBWB mode: aircraft responds to stick inputs
+5. Upload 3-waypoint mission → switch to Auto: aircraft follows waypoints
+6. Compare estimated state vs truth state channels in GDS
 
 ---
 
-## Verification (End-to-End)
+## Dev Notes / Gotchas
 
-1. Terminal 1: `fprime-util build sitl && fprime-util gds sitl`
-2. Terminal 2: `python3 tools/rc_input.py`
-3. Open GDS dashboard in browser
-4. Press W/A/S/D — observe attitude changes in GDS telemetry plots
-5. Release keys — aircraft returns to level flight
-6. Compare estimated state vs truth state channels — EKF tracks accurately
+- **FPP reserved words**: `throttle`, `state`, `send`, `recv`, `health` need backtick escape in FPP: `$throttle`, `$state`, etc.
+- **FPP autocoded accessors**: Field `position_ned` generates `get_position_ned()` / `set_position_ned()` — underscores preserved, `get_`/`set_` prefix added.
+- **Output port fan-out**: F Prime output ports are **1-to-1**. To send the same data to N destinations, declare an array: `output port truthStateOut: [4] Ap.StatePort`, then loop over indices in the `.cpp`. Each `[i]` connects to one input port in the topology.
+- **Header-only CMake modules**: `register_fprime_module()` requires at least one `.cpp` source. For header-only libraries (e.g. `AP/Math/`), use plain CMake `add_library(Ap_Math INTERFACE)` instead.
+- **Config overrides replace entire file**: When overriding `AcConstants.fpp`, you must copy ALL constants from the default file — the override replaces, not merges.
+- **Queued component pattern**: Use `sync input port schedIn` + `async input port dataIn`. In `schedIn_handler`, call `this->dispatchCurrentMessages()` to drain **all** queued async messages before processing. Using `doDispatch()` only processes one message — if the sender is faster than the receiver, the queue will overflow and assert.
+- **Queue sizing for rate mismatch**: If component A sends at 400Hz to component B's async port, and B drains at 10Hz, the queue needs at least 400/10 = 40 depth. Always use `dispatchCurrentMessages()` and size queues generously (50+).
+- **Virtual env for dev**: Use the venv: `source ../venvs/fprime311/bin/activate` - as it contains Python3.11.x as 3.12 was not supported by fprime.
 
 ---
 
 ## Future Roadmap
 
-- **Guidance**: L1 lateral navigation, TECS airspeed/altitude control
-- **Autonomy**: Waypoint mission manager, mode state machine (AUTO, LOITER, RTL, LAND)
+- **More flight modes**: LOITER, RTL, LAND
+- **Full EKF**: Upgrade StateEstimator from complementary filter to 15-state EKF
+- **MAVLink parameter protocol**: Expose F Prime params to QGC for live tuning
 - **Hardware**: STM32H7 deployment with FreeRTOS, real sensor drivers (SPI/I2C/UART), PWM servo output
-- **Ground Station**: Evolve Python RC script into a full mission planner GUI

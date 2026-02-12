@@ -48,9 +48,53 @@ module Sitl {
     stack size Default.STACK_SIZE \
     priority 42
 
+  # MAVLink gateway (active — own thread for future recv loop)
+  instance mavlinkGateway: Ap.MavlinkGateway base id 0x10040000 \
+    queue size 20 \
+    stack size Default.STACK_SIZE \
+    priority 40
+
+  # ----------------------------------------------------------------------
+  # Sim component instances (queued — need queue size but no thread)
+  # ----------------------------------------------------------------------
+
+  # All sim sensors receive truth state at 400Hz from SimDynamics via async ports.
+  # Queue depth must be >= (400 / sensor_rate) to avoid overflow between drain cycles.
+  # Add margin for startup timing.
+
+  instance simDynamics: Ap.SimDynamics base id 0x10030000 \
+    queue size Default.QUEUE_SIZE
+
+  instance simImu: Ap.SimImu base id 0x10031000 \
+    queue size 50
+
+  instance simGps: Ap.SimGps base id 0x10032000 \
+    queue size 50
+
+  instance simBaro: Ap.SimBaro base id 0x10033000 \
+    queue size 50
+
+  instance simMag: Ap.SimMag base id 0x10034000 \
+    queue size 50
+
+  # ----------------------------------------------------------------------
+  # Flight control component instances (queued)
+  # ----------------------------------------------------------------------
+
+  instance stateEstimator: Ap.StateEstimator base id 0x10043000 \
+    queue size 50
+
+  instance autonomy: Ap.Autonomy base id 0x10041000 \
+    queue size 20
+
+  instance controller: Ap.Controller base id 0x10042000 \
+    queue size 20
+
   # ----------------------------------------------------------------------
   # Passive component instances
   # ----------------------------------------------------------------------
+
+  instance simServoDriver: Ap.SimServoDriver base id 0x10035000
 
   instance linuxTimer: Svc.LinuxTimer base id 0x10020000
 

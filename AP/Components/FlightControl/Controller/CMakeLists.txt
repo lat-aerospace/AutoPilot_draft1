@@ -1,0 +1,9 @@
+set(SOURCE_FILES
+    "${CMAKE_CURRENT_LIST_DIR}/Controller.fpp"
+    "${CMAKE_CURRENT_LIST_DIR}/Controller.cpp"
+)
+set(MOD_DEPS
+    AP_Types
+    AP_Ports
+)
+register_fprime_module()

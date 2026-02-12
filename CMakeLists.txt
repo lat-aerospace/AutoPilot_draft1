@@ -17,6 +17,10 @@ include("${CMAKE_CURRENT_LIST_DIR}/lib/fprime/cmake/FPrime.cmake")
 add_library(eigen INTERFACE)
 target_include_directories(eigen SYSTEM INTERFACE "${CMAKE_CURRENT_LIST_DIR}/lib/eigen")
 
+# MAVLink v2 — header-only C library
+add_library(mavlink INTERFACE)
+target_include_directories(mavlink SYSTEM INTERFACE "${CMAKE_CURRENT_LIST_DIR}/lib/mavlink")
+
 fprime_setup_included_code()
 
 # Project configuration overrides (e.g. RateGroupDriverRateGroupPorts = 4)

@@ -5,6 +5,7 @@
 
 #include <AP/Top/Sitl/SitlTopologyAc.hpp>
 #include <Fw/Types/MallocAllocator.hpp>
+#include <AP/Components/Mavlink/MavlinkGateway/MavlinkGateway.hpp>
 
 using namespace Sitl;
 
@@ -59,6 +60,12 @@ void setupTopology(const TopologyState& state) {
     }
 
     configureTopology();
+
+    // Open MAVLink UDP socket
+    // Send telemetry to MissionPlanner on 127.0.0.1:14550
+    // Receive on 0.0.0.0:14540
+    mavlinkGateway.configure("127.0.0.1", 14550, 14540);
+
     loadParameters();
     startTasks(state);
 

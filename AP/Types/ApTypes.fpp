@@ -73,4 +73,26 @@ module Ap {
         $throttle: F32  @< Throttle stick (0.0 to 1.0)
     }
 
+    @ Flight mode enumeration
+    enum FlightMode {
+        FBWB    @< Fly-By-Wire-B (stick-mapped guidance)
+        AUTO    @< Autonomous waypoint following
+    }
+
+    @ Guidance command — output of Autonomy, input of Controller
+    struct GuidanceCmd {
+        desired_alt_m: F64          @< Desired altitude MSL (m)
+        desired_airspeed_ms: F64    @< Desired true airspeed (m/s)
+        desired_heading_deg: F64    @< Desired heading (deg, 0=North, CW)
+    }
+
+    @ Mission waypoint for autonomous navigation
+    struct MissionWaypoint {
+        seq: U16          @< Waypoint sequence number
+        lat_deg: F64      @< Latitude (degrees)
+        lon_deg: F64      @< Longitude (degrees)
+        alt_msl_m: F32    @< Altitude above MSL (m)
+        speed_ms: F32     @< Desired speed at waypoint (m/s)
+    }
+
 }

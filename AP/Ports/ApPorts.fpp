@@ -21,4 +21,13 @@ module Ap {
     @ Port for RC receiver channels
     port RcPort(ref rc: RcChannels)
 
+    @ Port for flight mode changes
+    port ModePort(mode: FlightMode)
+
+    @ Port for guidance commands (Autonomy → Controller)
+    port GuidanceCmdPort(ref cmd: GuidanceCmd)
+
+    @ Port for mission waypoint uploads (MavlinkGateway → Autonomy)
+    port MissionWaypointPort(ref wp: MissionWaypoint)
+
 }
