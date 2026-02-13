@@ -1,109 +1,69 @@
 # Status of AutoPilot project
 
-**Current state (Feb 2026):** Full closed-loop SITL running. 6-DOF physics → sim sensors → state estimator → controller → servo driver. MavlinkGateway sends telemetry to MissionPlanner (aircraft visible on map, attitude/position/HUD working). Autonomy component wired with FBWB stick mapping. Joystick input from MissionPlanner not yet verified — debugging MANUAL_CONTROL / RC_CHANNELS_OVERRIDE reception.
+**Current state (Feb 13 2026):** Full closed-loop SITL running end-to-end. QGroundControl joystick (FBWB mode) controls the aircraft through the complete chain: QGC → MavlinkGateway → Autonomy → Controller → SimServoDriver → SimDynamics → SimSensors → StateEstimator → telemetry back to QGC. Aircraft visible on QGC map with live attitude, position, and HUD. Stick inputs confirmed via GDS telemetry (`rcRoll`, `rcPitch`, `rcThrottle`, `rcYaw` → `desHeading`, `desAlt`, `desAirspeed`).
 
-## Phase 1: Skeleton (see README)
+## Phase 1: Skeleton [COMPLETE]
 
-- [x] Eigen 3.4.0 git submodule (`lib/eigen/`)
-- [x] Eigen INTERFACE library in top-level CMakeLists
-- [x] `AP/Math/` — ApMath.hpp (typedefs, constants), CoordTransforms.hpp (NED/LLA, DCM, quat)
-- [x] `AP/Types/ApTypes.fpp` — Vec3, Quat, ImuData, GpsData, BaroData, MagData, AircraftState, SurfaceCmd, RcChannels, FlightMode, GuidanceCmd, MissionWaypoint
-- [x] `AP/Ports/ApPorts.fpp` — ImuPort, GpsPort, BaroPort, MagPort, StatePort, SurfaceCmdPort, RcPort, ModePort, GuidanceCmdPort, MissionWaypointPort
-- [x] `config/AcConstants.fpp` — RateGroupDriverRateGroupPorts = 4
-- [x] `AP/Top/Sitl/` — SITL topology: LinuxTimer 400Hz, 4 rate groups (400/100/50/10Hz), CdhCore + ComCcsds subtopologies, TcpClient for GDS
-- [x] `sitl` build preset in CMakePresets.json
-- [x] Build passes (binary + GDS dictionary generated)
-- [x] Verify: run binary, connect GDS, see rate group telemetry ticking
+Types, ports, rate groups, GDS link. See README for details.
+
+- Eigen 3.4.0, `AP/Math/`, `AP/Types/`, `AP/Ports/`
+- SITL topology: LinuxTimer 400Hz, 4 rate groups (400/100/50/10Hz), CdhCore + ComCcsds, TcpClient for GDS
+- Binary runs, GDS connects, rate group telemetry ticking
 
 ## Phase 2: Simulation — 6-DOF + Sim Sensors [COMPLETE]
 
-Simplified model: inline force/moment math (~10 constants), no interface hierarchy.
-Swap in real aero derivatives later without changing integrator or F Prime wiring.
+- `RigidBody6DOF` — 13-state vector, forward Euler, inline force/moment model (~12 tunable constants)
+- `SimDynamics` (queued 400Hz), `SimServoDriver` (passive), `SimImu` (400Hz), `SimGps` (10Hz), `SimBaro` (50Hz), `SimMag` (100Hz)
+- All wired into topology, truth state verified in GDS
 
-### 2a: Pure C++ math (no F Prime dependency)
+## Phase 3: Flight Control + GCS Integration [IN PROGRESS]
 
-- [x] `RigidBody6DOF` — 13-state vector, forward Euler integrator, inline simple force/moment model, ~12 tunable constants in `SimpleAircraftParams`, build passes
+### 3a: Foundation [COMPLETE]
 
-### 2b: F Prime sim components
+FlightMode/GuidanceCmd/MissionWaypoint types, MAVLink c_library_v2 submodule.
 
-- [x] `SimDynamics.fpp/.hpp/.cpp` — queued, wraps RigidBody6DOF, outputs truth AircraftState via truthStateOut[4] fan-out
-- [x] `SimServoDriver.fpp/.hpp/.cpp` — passive, forwards SurfaceCmd to SimDynamics
-- [x] `SimImu.fpp/.hpp/.cpp` — queued 400Hz, gravity-in-body + noise → ImuData
-- [x] `SimGps.fpp/.hpp/.cpp` — queued 10Hz, NED→LLA + noise → GpsData
-- [x] `SimBaro.fpp/.hpp/.cpp` — queued 50Hz, ISA pressure model + noise → BaroData
-- [x] `SimMag.fpp/.hpp/.cpp` — queued 100Hz, earth field rotated to body + noise → MagData
+### 3b: StateEstimator [COMPLETE]
 
-### 2c: Integration
+Complementary filter (α=0.98): gyro integration + accel (roll/pitch) + tilt-compensated mag (yaw). Position from GPS→NED, altitude from baro, velocity from GPS. Fan-out to Controller, Autonomy, MavlinkGateway.
 
-- [x] Wire sim components into topology (instances.fpp + topology.fpp)
-- [x] Build passes
-- [x] Verify: surface cmd via GDS → aircraft moves in telemetry
+### 3c: Controller [COMPLETE]
 
-## Phase 3: Flight Control + MissionPlanner Integration [IN PROGRESS]
+Cascaded P controllers: heading→roll→aileron, altitude→pitch→elevator, airspeed→throttle. Holds approximate altitude/heading/speed with hardcoded or commanded GuidanceCmd.
 
-Linear chain: MavlinkGateway → Autonomy → Controller → ServoDriver
+### 3d: MavlinkGateway [COMPLETE]
 
-### 3a: Foundation (types, ports, mavlink submodule) [COMPLETE]
+Active component with POSIX UDP. Heartbeat 1Hz (`MAV_TYPE_FIXED_WING`, `MAV_AUTOPILOT_GENERIC`). Telemetry 10Hz: ATTITUDE, GLOBAL_POSITION_INT, VFR_HUD, SYS_STATUS. Non-blocking recv parses MANUAL_CONTROL, RC_CHANNELS_OVERRIDE, COMMAND_LONG, PARAM_REQUEST_LIST/READ, HEARTBEAT. Minimal 3-param table for GCS handshake. Dynamic GCS address capture.
 
-- [x] Add `FlightMode` enum, `GuidanceCmd`, `MissionWaypoint` to ApTypes.fpp
-- [x] Add `ModePort`, `GuidanceCmdPort`, `MissionWaypointPort` to ApPorts.fpp
-- [x] Add `c_library_v2` git submodule under `lib/mavlink`
-- [x] Add `mavlink` INTERFACE library to root CMakeLists.txt
-- [x] Build passes
+### 3e: Autonomy + FBWB mode [COMPLETE]
 
-### 3b: StateEstimator (complementary filter) [COMPLETE]
+FBWB stick mapping in Autonomy (queued, 10Hz):
 
-- [x] Create `AP/Components/FlightControl/StateEstimator/` — FPP, HPP, CPP, CMakeLists
-- [x] Complementary filter: gyro integration + accel (roll/pitch) + tilt-compensated mag (yaw), α=0.98
-- [x] Position from GPS lat/lon → NED, altitude from baro, velocity from GPS
-- [x] Wire sensors → StateEstimator, stateOut[0-2] fan-out (Controller, Autonomy, MavlinkGateway)
-- [x] Build passes, binary runs stable
-- [x] Verify estimated state tracks truth in GDS
+| RC Input | Range | Guidance Output | Mapping |
+|----------|-------|-----------------|---------|
+| `rcPitch` | -1 to +1 | `desAlt` | Integrates at ±5 m/s per full stick |
+| `rcRoll` | -1 to +1 | `desHeading` | Integrates at ±30°/s per full stick |
+| `rcThrottle` | 0 to 1 | `desAirspeed` | Linear map to 20-80 m/s |
+| `rcYaw` | -1 to +1 | *(unused)* | — |
 
-### 3c: Controller (cascaded P controllers) [COMPLETE]
+Full chain wired: MavlinkGateway.rcOut → Autonomy.rcIn → guidanceCmdOut → Controller → SimServoDriver.
 
-- [x] Create `AP/Components/FlightControl/Controller/` — FPP, HPP, CPP, CMakeLists
-- [x] Heading → desired roll (Kp=0.05) → aileron (Kp=0.02), clamp ±30° bank
-- [x] Altitude → desired pitch (Kp=0.1) → elevator (Kp=0.03), clamp ±15° pitch
-- [x] Airspeed error → throttle (Kp=0.05, trim=0.5)
-- [x] Default GuidanceCmd: 2000m MSL, 50 m/s, heading 0°
-- [x] Wire: stateEstimator.stateOut[0] → controller.stateIn, controller.surfaceCmdOut → simServoDriver
-- [x] Build passes, binary runs stable
-- [x] Aircraft holds approximate altitude/heading with hardcoded GuidanceCmd
+**GCS setup:** QGroundControl over UDP 14550. MissionPlanner was tested but never sends joystick data (requires ArduPilot-specific RC calibration params). QGC sends MANUAL_CONTROL at 10-20Hz without special param requirements. Throttle axis couldn't be mapped to main stick in QGC — using SB stick on joystick as workaround.
 
-### 3d: MavlinkGateway (heartbeat + telemetry out) [COMPLETE]
-
-- [x] Create `AP/Components/Mavlink/MavlinkGateway/` — active component, FPP, HPP, CPP, CMakeLists
-- [x] POSIX UDP socket: send to `127.0.0.1:14550`, recv on `0.0.0.0:14540`
-- [x] HEARTBEAT 1Hz (MAV_TYPE_FIXED_WING, MAV_AUTOPILOT_GENERIC)
-- [x] Telemetry 10Hz: ATTITUDE, GLOBAL_POSITION_INT, VFR_HUD, SYS_STATUS
-- [x] Wire: stateEstimator.stateOut[2] → mavlinkGateway.stateIn, schedIn on RG4
-- [x] Build passes, binary runs stable, UDP packets verified
-- [x] MissionPlanner sees aircraft on map with live attitude/position/HUD
-
-### 3e: Autonomy + FBWB mode [IN PROGRESS]
-
-- [x] Create `AP/Components/FlightControl/Autonomy/` — FPP, HPP, CPP, CMakeLists
-- [x] FBWB stick mapping: pitch→alt rate (±5 m/s), roll→heading rate (±30°/s), throttle→airspeed (20-80 m/s)
-- [x] MavlinkGateway recv: non-blocking UDP, parses MANUAL_CONTROL + RC_CHANNELS_OVERRIDE
-- [x] MavlinkGateway sends COMMAND_ACK for COMMAND_LONG (arm/disarm)
-- [x] Wire full chain: MavlinkGateway → Autonomy → Controller → ServoDriver
-- [x] Build passes, binary runs stable
-- [ ] **BLOCKED:** MissionPlanner joystick data not reaching SITL — `lastRecvMsgId` shows only HEARTBEAT (ID 0) and COMMAND_LONG (ID 76) from MissionPlanner. Joystick visible in MissionPlanner HUD but MANUAL_CONTROL / RC_CHANNELS_OVERRIDE not being sent. Likely needs further MissionPlanner configuration or protocol handshake.
+**Telemetry channels** (MavlinkGateway): `rcRoll`, `rcPitch`, `rcThrottle`, `rcYaw`, `rcMsgCount`. Combined with Autonomy channels (`desAlt`, `desAirspeed`, `desHeading`) for full input→output visibility in GDS.
 
 ### 3f: Auto mode [NOT STARTED]
 
-- [ ] Add waypoint storage + path guidance to Autonomy
-- [ ] Add MISSION protocol to MavlinkGateway
-- [ ] Test: upload mission, switch to Auto, aircraft follows waypoints
+- [ ] Waypoint storage + path guidance in Autonomy
+- [ ] MISSION protocol in MavlinkGateway
+- [ ] Test: upload mission in QGC, switch to Auto, aircraft follows waypoints
 
 ## Known Issues
 
-- **Magnetic declination**: estYaw reads ~345° instead of 0° due to magnetic declination at Albuquerque reference point (not true north). Correctable with declination offset.
-- **P-only controller**: No integral term, so steady-state errors exist. Aircraft holds approximately but not perfectly.
-- **No wind model**: Airspeed = groundspeed in state estimator. Fine for SITL, needs wind correction later.
-- **MissionPlanner joystick**: Data not reaching SITL yet — see 3e BLOCKED note above.
+- **Magnetic declination**: estYaw reads ~345° instead of 0° (Albuquerque reference point). Correctable with declination offset.
+- **P-only controller**: No integral term → steady-state errors. Aircraft holds approximately but not perfectly.
+- **No wind model**: Airspeed = groundspeed. Fine for SITL.
+- **QGC throttle axis**: Cannot map throttle to main joystick stick — using SB stick as workaround.
 
 ## Future
 
-See README for roadmap (more modes, full EKF, MAVLink params, hardware).
+See README for roadmap (more modes, full EKF, MAVLink params, STM32H7 hardware).

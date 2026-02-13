@@ -24,14 +24,20 @@ module Ap {
         # Telemetry
         # ----------------------------------------------------------------------
 
-        @ Number of MAVLink messages sent
-        telemetry mavMsgsSent: U32
+        @ RC roll input (-1 to +1). Maps to desHeading via integration at 30 deg/s.
+        telemetry rcRoll: F32
 
-        @ Number of MAVLink messages received
-        telemetry mavMsgsRecvd: U32
+        @ RC pitch input (-1 to +1). Maps to desAlt via integration at 5 m/s.
+        telemetry rcPitch: F32
 
-        @ Last received MAVLink message ID (for debug)
-        telemetry lastRecvMsgId: U32
+        @ RC throttle input (0 to 1). Maps to desAirspeed linearly (20-80 m/s).
+        telemetry rcThrottle: F32
+
+        @ RC yaw input (-1 to +1). Currently unused.
+        telemetry rcYaw: F32
+
+        @ Number of RC/joystick messages received
+        telemetry rcMsgCount: U32
 
         # ----------------------------------------------------------------------
         # Events
@@ -46,6 +52,16 @@ module Ap {
         event MavlinkSocketFailed(errno: I32) \
             severity warning high \
             format "MAVLink UDP socket failed to open, errno={}"
+
+        @ Param download requested by GCS
+        event ParamRequestReceived(count: U32) \
+            severity activity high \
+            format "GCS requested param download (sent {} params)"
+
+        @ Received a MAVLink message (for debug, logs msg ID)
+        event MavMsgReceived(msgId: U32) \
+            severity activity low \
+            format "MAVLink msg received: ID={}"
 
         # ----------------------------------------------------------------------
         # Standard AC Ports

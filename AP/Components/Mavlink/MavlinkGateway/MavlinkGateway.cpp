@@ -11,10 +11,27 @@
 
 namespace Ap {
 
+// -------------------------------------------------------------------------
+// Minimal parameter table — satisfies MissionPlanner's connection handshake
+// -------------------------------------------------------------------------
+struct ParamEntry {
+    char name[16];   // MAVLink param name (max 16 chars, null-padded)
+    float value;
+};
+
+static const ParamEntry PARAM_TABLE[] = {
+    {"SYSID_THISMAV",  1.0f},
+    {"ARMING_CHECK",   0.0f},
+    {"FORMAT_VERSION", 1.0f},
+};
+
+static constexpr uint16_t PARAM_COUNT = sizeof(PARAM_TABLE) / sizeof(PARAM_TABLE[0]);
+
 MavlinkGateway::MavlinkGateway(const char* const compName)
     : MavlinkGatewayComponentBase(compName)
 {
     memset(&m_targetAddr, 0, sizeof(m_targetAddr));
+    memset(&m_gcsAddr, 0, sizeof(m_gcsAddr));
     memset(&m_rxMsg, 0, sizeof(m_rxMsg));
     memset(&m_rxStatus, 0, sizeof(m_rxStatus));
 }
@@ -80,9 +97,11 @@ void MavlinkGateway::schedIn_handler(FwIndexType portNum, U32 context) {
     // Telemetry at 10Hz (every tick)
     sendTelemetry();
 
-    this->tlmWrite_mavMsgsSent(m_msgsSent);
-    this->tlmWrite_mavMsgsRecvd(m_msgsRecvd);
-    this->tlmWrite_lastRecvMsgId(m_lastMsgId);
+    this->tlmWrite_rcRoll(m_rcRoll);
+    this->tlmWrite_rcPitch(m_rcPitch);
+    this->tlmWrite_rcThrottle(m_rcThrottle);
+    this->tlmWrite_rcYaw(m_rcYaw);
+    this->tlmWrite_rcMsgCount(m_rcMsgCnt);
 }
 
 // -------------------------------------------------------------------------
@@ -104,10 +123,23 @@ void MavlinkGateway::modeIn_handler(FwIndexType portNum, const Ap::FlightMode& m
 // -------------------------------------------------------------------------
 void MavlinkGateway::recvMavlink() {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    struct sockaddr_in srcAddr;
+    socklen_t srcLen = sizeof(srcAddr);
 
     while (true) {
-        ssize_t n = ::recvfrom(m_sockFd, buf, sizeof(buf), 0, nullptr, nullptr);
+        srcLen = sizeof(srcAddr);
+        ssize_t n = ::recvfrom(m_sockFd, buf, sizeof(buf), 0,
+                               reinterpret_cast<struct sockaddr*>(&srcAddr), &srcLen);
         if (n <= 0) break;  // EAGAIN/EWOULDBLOCK or error — no more data
+
+        // Capture the GCS address from the first non-loopback packet,
+        // so responses go back to wherever the GCS actually is.
+        if (!m_gcsKnown) {
+            m_gcsAddr = srcAddr;
+            // Update target to respond to actual GCS address + port 14550
+            m_targetAddr.sin_addr = srcAddr.sin_addr;
+            m_gcsKnown = true;
+        }
 
         // Feed each byte to the MAVLink parser
         for (ssize_t i = 0; i < n; i++) {
@@ -123,8 +155,6 @@ void MavlinkGateway::recvMavlink() {
 // handleMessage — process a decoded MAVLink message
 // -------------------------------------------------------------------------
 void MavlinkGateway::handleMessage(const mavlink_message_t& msg) {
-    m_lastMsgId = msg.msgid;
-
     switch (msg.msgid) {
         case MAVLINK_MSG_ID_MANUAL_CONTROL: {
             mavlink_manual_control_t mc;
@@ -137,6 +167,12 @@ void MavlinkGateway::handleMessage(const mavlink_message_t& msg) {
             rc.set_pitch(static_cast<F32>(mc.x) / 1000.0f);
             rc.set_throttle(static_cast<F32>(mc.z) / 1000.0f);
             rc.set_yaw(static_cast<F32>(mc.r) / 1000.0f);
+
+            m_rcRoll     = rc.get_roll();
+            m_rcPitch    = rc.get_pitch();
+            m_rcThrottle = rc.get_throttle();
+            m_rcYaw      = rc.get_yaw();
+            m_rcMsgCnt++;
 
             if (this->isConnected_rcOut_OutputPort(0)) {
                 this->rcOut_out(0, rc);
@@ -155,6 +191,12 @@ void MavlinkGateway::handleMessage(const mavlink_message_t& msg) {
             rc.set_throttle(static_cast<F32>(rc_ov.chan3_raw - 1000) / 1000.0f);
             rc.set_yaw(static_cast<F32>(rc_ov.chan4_raw - 1500) / 500.0f);
 
+            m_rcRoll     = rc.get_roll();
+            m_rcPitch    = rc.get_pitch();
+            m_rcThrottle = rc.get_throttle();
+            m_rcYaw      = rc.get_yaw();
+            m_rcMsgCnt++;
+
             if (this->isConnected_rcOut_OutputPort(0)) {
                 this->rcOut_out(0, rc);
             }
@@ -164,7 +206,7 @@ void MavlinkGateway::handleMessage(const mavlink_message_t& msg) {
             mavlink_command_long_t cmd;
             mavlink_msg_command_long_decode(&msg, &cmd);
 
-            // ACK every command as accepted (keeps MissionPlanner happy)
+            // ACK every command as accepted
             mavlink_message_t ack;
             mavlink_msg_command_ack_pack(
                 SYS_ID, COMP_ID, &ack,
@@ -174,13 +216,81 @@ void MavlinkGateway::handleMessage(const mavlink_message_t& msg) {
                 msg.sysid, msg.compid
             );
             sendMavlinkMsg(ack);
+
+            // Handle specific commands that expect follow-up data
+            if (cmd.command == MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES ||
+                (cmd.command == MAV_CMD_REQUEST_MESSAGE &&
+                 static_cast<uint32_t>(cmd.param1) == MAVLINK_MSG_ID_AUTOPILOT_VERSION)) {
+                uint8_t zeros8[8] = {};
+                uint8_t zeros18[18] = {};
+                mavlink_message_t ver;
+                mavlink_msg_autopilot_version_pack(
+                    SYS_ID, COMP_ID, &ver,
+                    MAV_PROTOCOL_CAPABILITY_PARAM_FLOAT |
+                    MAV_PROTOCOL_CAPABILITY_MAVLINK2,
+                    0, 0, 0, 0,        // flight/middleware/os/board sw version
+                    zeros8, zeros8, zeros8,  // custom versions (8-byte arrays)
+                    0, 0, 0,           // vendor/product/uid
+                    zeros18            // uid2
+                );
+                sendMavlinkMsg(ver);
+            }
+            break;
+        }
+        case MAVLINK_MSG_ID_PARAM_REQUEST_LIST: {
+            // MissionPlanner requests all params during connection handshake.
+            // Must respond with PARAM_VALUE for each param or MP won't
+            // consider itself connected (and joystick thread won't start).
+            sendAllParams();
+            this->log_ACTIVITY_HI_ParamRequestReceived(PARAM_COUNT);
+            break;
+        }
+        case MAVLINK_MSG_ID_PARAM_REQUEST_READ: {
+            mavlink_param_request_read_t req;
+            mavlink_msg_param_request_read_decode(&msg, &req);
+
+            if (req.param_index >= 0 && req.param_index < PARAM_COUNT) {
+                sendParamValue(static_cast<uint16_t>(req.param_index));
+            } else {
+                // Lookup by name
+                sendParamByName(req.param_id);
+            }
+            break;
+        }
+        case MAVLINK_MSG_ID_REQUEST_DATA_STREAM: {
+            // MissionPlanner requests data streams — we already send
+            // telemetry at 10Hz unconditionally, so just ACK by sending
+            // a DATA_STREAM message confirming the rate.
+            mavlink_request_data_stream_t ds;
+            mavlink_msg_request_data_stream_decode(&msg, &ds);
+
+            mavlink_message_t resp;
+            mavlink_msg_data_stream_pack(
+                SYS_ID, COMP_ID, &resp,
+                ds.req_stream_id,
+                ds.req_message_rate,
+                ds.start_stop
+            );
+            sendMavlinkMsg(resp);
             break;
         }
         case MAVLINK_MSG_ID_HEARTBEAT: {
-            // GCS heartbeat — ignore
+            mavlink_heartbeat_t hb;
+            mavlink_msg_heartbeat_decode(&msg, &hb);
+
+            // Only process GCS heartbeats (type 6 = MAV_TYPE_GCS), not our own echoes
+            if (hb.type == MAV_TYPE_GCS && !m_paramsSentToGcs) {
+                // Proactively send all params on first GCS heartbeat detection.
+                // This handles the case where MissionPlanner's PARAM_REQUEST_LIST
+                // was lost or never sent (UDP auto-detect mode).
+                m_paramsSentToGcs = true;
+                sendAllParams();
+                this->log_ACTIVITY_HI_ParamRequestReceived(PARAM_COUNT);
+            }
             break;
         }
         default:
+            this->log_ACTIVITY_LO_MavMsgReceived(msg.msgid);
             break;
     }
 }
@@ -203,11 +313,22 @@ void MavlinkGateway::sendMavlinkMsg(const mavlink_message_t& msg) {
 // -------------------------------------------------------------------------
 void MavlinkGateway::sendHeartbeat() {
     mavlink_message_t msg;
+
+    // base_mode flags that tell GCS what this autopilot supports/is doing:
+    // - CUSTOM_MODE_ENABLED: custom_mode field is meaningful
+    // - STABILIZE_ENABLED: autopilot is stabilizing
+    // - MANUAL_INPUT_ENABLED: RC/joystick input accepted
+    // - SAFETY_ARMED: vehicle is armed (required by some GCS for RC override)
+    uint8_t baseMode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+                     | MAV_MODE_FLAG_STABILIZE_ENABLED
+                     | MAV_MODE_FLAG_MANUAL_INPUT_ENABLED
+                     | MAV_MODE_FLAG_SAFETY_ARMED;
+
     mavlink_msg_heartbeat_pack(
         SYS_ID, COMP_ID, &msg,
         MAV_TYPE_FIXED_WING,
         MAV_AUTOPILOT_GENERIC,
-        MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+        baseMode,
         static_cast<uint32_t>(m_mode),  // custom_mode = FBWB(0) or AUTO(1)
         MAV_STATE_ACTIVE
     );
@@ -294,6 +415,45 @@ void MavlinkGateway::sendTelemetry() {
             75, 0, 0, 0
         );
         sendMavlinkMsg(msg);
+    }
+}
+
+// -------------------------------------------------------------------------
+// sendAllParams — respond to PARAM_REQUEST_LIST with every parameter
+// -------------------------------------------------------------------------
+void MavlinkGateway::sendAllParams() {
+    for (uint16_t i = 0; i < PARAM_COUNT; i++) {
+        sendParamValue(i);
+    }
+}
+
+// -------------------------------------------------------------------------
+// sendParamValue — send a single PARAM_VALUE by index
+// -------------------------------------------------------------------------
+void MavlinkGateway::sendParamValue(uint16_t index) {
+    if (index >= PARAM_COUNT) return;
+
+    mavlink_message_t msg;
+    mavlink_msg_param_value_pack(
+        SYS_ID, COMP_ID, &msg,
+        PARAM_TABLE[index].name,
+        PARAM_TABLE[index].value,
+        MAV_PARAM_TYPE_REAL32,
+        PARAM_COUNT,
+        index
+    );
+    sendMavlinkMsg(msg);
+}
+
+// -------------------------------------------------------------------------
+// sendParamByName — send a single PARAM_VALUE by name lookup
+// -------------------------------------------------------------------------
+void MavlinkGateway::sendParamByName(const char* name) {
+    for (uint16_t i = 0; i < PARAM_COUNT; i++) {
+        if (strncmp(PARAM_TABLE[i].name, name, 16) == 0) {
+            sendParamValue(i);
+            return;
+        }
     }
 }
 

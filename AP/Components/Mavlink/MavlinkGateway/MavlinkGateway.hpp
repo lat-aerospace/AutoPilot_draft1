@@ -39,6 +39,15 @@ class MavlinkGateway final : public MavlinkGatewayComponentBase {
     // Process a decoded MAVLink message
     void handleMessage(const mavlink_message_t& msg);
 
+    // Send all parameters (response to PARAM_REQUEST_LIST)
+    void sendAllParams();
+
+    // Send a single PARAM_VALUE by index
+    void sendParamValue(uint16_t index);
+
+    // Send a single PARAM_VALUE by name
+    void sendParamByName(const char* name);
+
     // Latest estimated state
     Ap::AircraftState m_state;
 
@@ -50,10 +59,23 @@ class MavlinkGateway final : public MavlinkGatewayComponentBase {
     struct sockaddr_in m_targetAddr;
 
     // Heartbeat counter (send every 10th schedIn = 1Hz)
-    U32 m_tickCount   = 0;
-    U32 m_msgsSent    = 0;
-    U32 m_msgsRecvd   = 0;
-    U32 m_lastMsgId   = 0;
+    U32 m_tickCount    = 0;
+    U32 m_msgsSent     = 0;
+    U32 m_msgsRecvd    = 0;
+    U32 m_rcMsgCnt     = 0;
+
+    // Latest RC stick values for telemetry
+    F32 m_rcRoll     = 0.0f;
+    F32 m_rcPitch    = 0.0f;
+    F32 m_rcThrottle = 0.0f;
+    F32 m_rcYaw      = 0.0f;
+
+    // Dynamic GCS address — updated from received packets
+    struct sockaddr_in m_gcsAddr;
+    bool m_gcsKnown = false;
+
+    // True after we proactively sent params to the GCS (one-shot)
+    bool m_paramsSentToGcs = false;
 
     // MAVLink parser state
     mavlink_message_t m_rxMsg;
