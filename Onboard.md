@@ -3,7 +3,7 @@
 ## Steps
 
 1. **Linux environment** — WSL2 + Ubuntu 22.04 (on Windows)
-2. **System packages** — gcc, g++, git, cmake, ninja, pkg-config
+2. **System packages** — gcc, g++, git, pkg-config
 3. **Python 3.11** — required by F Prime tooling (3.12 not supported)
 4. **Java JDK 17+** — FPP compiler runs on JVM
 5. **VS Code + extensions** — Remote-WSL, C/C++, FPP syntax

@@ -36,14 +36,20 @@ class StateEstimator final : public StateEstimatorComponentBase {
     // Position NED (from GPS)
     double m_posN = 0.0;
     double m_posE = 0.0;
-    double m_posD = 0.0;
+    double m_posD = -1000.0;  // match initial altitude (1000m AGL)
 
     // Velocity NED (from GPS)
-    double m_velN = 0.0;
+    double m_velN = 50.0;  // match initial airspeed (heading north)
     double m_velE = 0.0;
     double m_velD = 0.0;
 
     bool m_initialized = false;
+
+    // Track sensor availability — don't output until all have reported
+    bool m_hasImu  = false;
+    bool m_hasBaro = false;
+    bool m_hasGps  = false;
+    bool m_hasMag  = false;
 };
 
 }  // namespace Ap

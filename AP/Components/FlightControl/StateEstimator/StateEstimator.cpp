@@ -17,19 +17,36 @@ void StateEstimator::schedIn_handler(FwIndexType portNum, U32 context) {
     // Drain all queued sensor messages
     this->dispatchCurrentMessages();
 
+    // Wait until all sensors have reported at least once
+    if (!(m_hasImu && m_hasBaro && m_hasGps && m_hasMag)) {
+        return;
+    }
+
     constexpr double DT = 0.01;  // 100Hz
 
     // --- Attitude estimation (complementary filter) ---
 
-    // Gyro rates (deg/s → rad/s)
-    const double gx = m_imu.get_gyro_dps().get_x() * Ap::DEG2RAD;
-    const double gy = m_imu.get_gyro_dps().get_y() * Ap::DEG2RAD;
-    const double gz = m_imu.get_gyro_dps().get_z() * Ap::DEG2RAD;
+    // Gyro rates (deg/s → rad/s): p, q, r in body frame
+    const double p = m_imu.get_gyro_dps().get_x() * Ap::DEG2RAD;
+    const double q = m_imu.get_gyro_dps().get_y() * Ap::DEG2RAD;
+    const double r = m_imu.get_gyro_dps().get_z() * Ap::DEG2RAD;
 
-    // Gyro prediction: integrate angular rates
-    double roll_gyro  = m_roll  + gx * DT;
-    double pitch_gyro = m_pitch + gy * DT;
-    double yaw_gyro   = m_yaw   + gz * DT;
+    // Euler angle kinematic equations (body rates → Euler rates)
+    // roll_dot  = p + (q*sin(roll) + r*cos(roll)) * tan(pitch)
+    // pitch_dot = q*cos(roll) - r*sin(roll)
+    // yaw_dot   = (q*sin(roll) + r*cos(roll)) / cos(pitch)
+    const double sr = std::sin(m_roll);
+    const double cr = std::cos(m_roll);
+    const double tp = std::tan(m_pitch);
+    const double cp = std::cos(m_pitch);
+
+    double roll_dot  = p + (q * sr + r * cr) * tp;
+    double pitch_dot = q * cr - r * sr;
+    double yaw_dot   = (cp > 0.01) ? (q * sr + r * cr) / cp : 0.0;
+
+    double roll_gyro  = m_roll  + roll_dot  * DT;
+    double pitch_gyro = m_pitch + pitch_dot * DT;
+    double yaw_gyro   = m_yaw   + yaw_dot   * DT;
 
     // Accel reference: roll and pitch from gravity direction
     const double ax = m_imu.get_accel_mps2().get_x();
@@ -44,14 +61,11 @@ void StateEstimator::schedIn_handler(FwIndexType portNum, U32 context) {
     const double my = m_mag.get_field_gauss().get_y();
     const double mz = m_mag.get_field_gauss().get_z();
 
-    // Tilt compensation
-    double cosR = std::cos(m_roll);
-    double sinR = std::sin(m_roll);
-    double cosP = std::cos(m_pitch);
+    // Tilt compensation (reuse sr/cr/cp from kinematic equations above)
     double sinP = std::sin(m_pitch);
 
-    double mx2 = mx * cosP + my * sinR * sinP + mz * cosR * sinP;
-    double my2 = my * cosR - mz * sinR;
+    double mx2 = mx * cp + my * sr * sinP + mz * cr * sinP;
+    double my2 = my * cr - mz * sr;
 
     double yaw_mag = std::atan2(-my2, mx2);
 
@@ -109,18 +123,18 @@ void StateEstimator::schedIn_handler(FwIndexType portNum, U32 context) {
     double pitchDeg = m_pitch * Ap::RAD2DEG;
     double yawDeg   = m_yaw   * Ap::RAD2DEG;
 
-    // Euler → quaternion
-    double cr = std::cos(m_roll  * 0.5);
-    double sr = std::sin(m_roll  * 0.5);
-    double cp = std::cos(m_pitch * 0.5);
-    double sp = std::sin(m_pitch * 0.5);
-    double cy = std::cos(m_yaw   * 0.5);
-    double sy = std::sin(m_yaw   * 0.5);
+    // Euler → quaternion (half-angle trig)
+    double chr = std::cos(m_roll  * 0.5);
+    double shr = std::sin(m_roll  * 0.5);
+    double chp = std::cos(m_pitch * 0.5);
+    double shp = std::sin(m_pitch * 0.5);
+    double chy = std::cos(m_yaw   * 0.5);
+    double shy = std::sin(m_yaw   * 0.5);
 
-    double qw = cr * cp * cy + sr * sp * sy;
-    double qx = sr * cp * cy - cr * sp * sy;
-    double qy = cr * sp * cy + sr * cp * sy;
-    double qz = cr * cp * sy - sr * sp * cy;
+    double qw = chr * chp * chy + shr * shp * shy;
+    double qx = shr * chp * chy - chr * shp * shy;
+    double qy = chr * shp * chy + shr * chp * shy;
+    double qz = chr * chp * shy - shr * shp * chy;
 
     Ap::AircraftState est;
     est.set_position_ned(Ap::Vec3(m_posN, m_posE, m_posD));
@@ -151,18 +165,22 @@ void StateEstimator::schedIn_handler(FwIndexType portNum, U32 context) {
 // -------------------------------------------------------------------------
 void StateEstimator::imuIn_handler(FwIndexType portNum, Ap::ImuData& data) {
     m_imu = data;
+    m_hasImu = true;
 }
 
 void StateEstimator::gpsIn_handler(FwIndexType portNum, Ap::GpsData& data) {
     m_gps = data;
+    m_hasGps = true;
 }
 
 void StateEstimator::baroIn_handler(FwIndexType portNum, Ap::BaroData& data) {
     m_baro = data;
+    m_hasBaro = true;
 }
 
 void StateEstimator::magIn_handler(FwIndexType portNum, Ap::MagData& data) {
     m_mag = data;
+    m_hasMag = true;
 }
 
 }  // namespace Ap

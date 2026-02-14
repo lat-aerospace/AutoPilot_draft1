@@ -22,7 +22,7 @@ class SimDynamics final : public SimDynamicsComponentBase {
 
     // --- Members ---
     Sim::RigidBody6DOF m_body;
-    Sim::SurfaceInput  m_latestCmd;
+    Sim::SurfaceInput  m_latestCmd{0.0, 0.0, 0.0, 0.5};  // trim throttle
     bool m_started = false;
 };
 

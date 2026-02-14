@@ -7,7 +7,7 @@ Controller::Controller(const char* const compName)
     : ControllerComponentBase(compName)
 {
     // Default guidance: hold initial conditions (2600m MSL, 50 m/s, heading north)
-    m_cmd.set_desired_alt_m(2000.0);
+    m_cmd.set_desired_alt_m(2600.0);
     m_cmd.set_desired_airspeed_ms(50.0);
     m_cmd.set_desired_heading_deg(0.0);
 }

@@ -48,8 +48,9 @@ struct SimpleAircraftParams {
     double maxThrust = 2000.0; // N
     double dragCoeff = 0.40;   // N/(m/s)^2  — simple quadratic drag
 
-    // Lift (just enough to oppose gravity in cruise)
-    double liftCoeff = 0.55;   // N/(m/s)^2
+    // Lift — must balance weight at cruise speed
+    // Trim: liftCoeff = mass*g / V_cruise^2 = 10228/2500 = 4.09
+    double liftCoeff = 4.09;   // N/(m/s)^2
 
     // Control surface moment gains (Nm per unit deflection)
     double lAil  = 2000.0;    // roll moment per aileron
@@ -60,6 +61,10 @@ struct SimpleAircraftParams {
     double dampP = 200.0;     // roll damping
     double dampQ = 300.0;     // pitch damping
     double dampR = 150.0;     // yaw damping
+
+    // Static stability (Nm per radian)
+    double pitchStiffness = 5000.0;  // Cma — restoring pitch moment per rad of alpha
+    double yawStiffness   = 2000.0;  // Cnb — weathercock restoring yaw moment per rad of beta
 };
 
 // -------------------------------------------------------------------------

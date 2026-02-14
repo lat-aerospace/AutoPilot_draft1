@@ -49,9 +49,22 @@ void RigidBody6DOF::setSurfaces(const SurfaceInput& cmd) {
 //
 
 void RigidBody6DOF::step(double dt) {
-    // Forward Euler — simplest integrator. Swap for RK4 later.
-    const StateVec ddt = computeDerivative(m_state, m_surfaces);
-    m_state += dt * ddt;
+    // RK4 integration
+    const StateVec k1 = computeDerivative(m_state, m_surfaces);
+
+    StateVec s2 = m_state + 0.5 * dt * k1;
+    normalizeQuat(s2);
+    const StateVec k2 = computeDerivative(s2, m_surfaces);
+
+    StateVec s3 = m_state + 0.5 * dt * k2;
+    normalizeQuat(s3);
+    const StateVec k3 = computeDerivative(s3, m_surfaces);
+
+    StateVec s4 = m_state + dt * k3;
+    normalizeQuat(s4);
+    const StateVec k4 = computeDerivative(s4, m_surfaces);
+
+    m_state += (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
     normalizeQuat(m_state);
     m_time += dt;
 }
@@ -98,10 +111,17 @@ StateVec RigidBody6DOF::computeDerivative(const StateVec& s,
     const double Fy =                 m_params.mass * g_body.y();
     const double Fz = -lift         + m_params.mass * g_body.z();
 
+    // --- Angle of attack and sideslip ---
+    const double alpha = (V_air > 1.0) ? std::atan2(w, u) : 0.0;
+    const double beta  = (V_air > 1.0) ? std::asin(v / V_air) : 0.0;
+
     // --- Moments in body frame ---
+    // Static stability: restoring moments proportional to aero angles
     const double L = cmd.aileron  * m_params.lAil  - m_params.dampP * p;
-    const double M = cmd.elevator * m_params.mElev - m_params.dampQ * q;
-    const double N = cmd.rudder   * m_params.nRud  - m_params.dampR * r;
+    const double M = cmd.elevator * m_params.mElev - m_params.dampQ * q
+                     - m_params.pitchStiffness * alpha;
+    const double N = cmd.rudder   * m_params.nRud  - m_params.dampR * r
+                     + m_params.yawStiffness * beta;
 
     // =====================================================================
     // Equations of motion

@@ -5,7 +5,10 @@ namespace Ap {
 
 Autonomy::Autonomy(const char* const compName)
     : AutonomyComponentBase(compName)
-{}
+{
+    // Default RC throttle to 0.5 so desSpeed = 50 m/s when no joystick connected
+    m_rc.set_throttle(0.5f);
+}
 
 Autonomy::~Autonomy() {}
 
