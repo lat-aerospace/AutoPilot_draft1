@@ -30,10 +30,20 @@ void SimMag::schedIn_handler(FwIndexType portNum, U32 context) {
     Ap::Vec3d magNED(MAG_N, MAG_E, MAG_D);
     Ap::Vec3d magBody = q.inverse() * magNED;
 
-    // Add noise
-    double mx = magBody.x() + m_magNoise(m_rng);
-    double my = magBody.y() + m_magNoise(m_rng);
-    double mz = magBody.z() + m_magNoise(m_rng);
+    // Soft-iron distortion (per-axis scale)
+    double mx = magBody.x() * SOFT_IRON_X;
+    double my = magBody.y() * SOFT_IRON_Y;
+    double mz = magBody.z() * SOFT_IRON_Z;
+
+    // Hard-iron offset (constant bias)
+    mx += HARD_IRON_X;
+    my += HARD_IRON_Y;
+    mz += HARD_IRON_Z;
+
+    // White noise
+    mx += MAG_NOISE_SIGMA * m_noise(m_rng);
+    my += MAG_NOISE_SIGMA * m_noise(m_rng);
+    mz += MAG_NOISE_SIGMA * m_noise(m_rng);
 
     Ap::MagData mag;
     mag.set_field_gauss(Ap::Vec3(mx, my, mz));

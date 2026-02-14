@@ -1,4 +1,5 @@
 #include "AP/Components/Sim/SimBaro/SimBaro.hpp"
+#include <cmath>
 
 namespace Ap {
 
@@ -16,19 +17,23 @@ void SimBaro::schedIn_handler(FwIndexType portNum, U32 context) {
 
     const auto pos = m_truth.get_position_ned();
 
-    // Reference altitude (same as SimGps)
     constexpr double REF_ALT = 1600.0;  // metres MSL
 
     // True altitude MSL = ref_alt - posD (NED down is negative altitude)
     double trueAlt = REF_ALT - pos.get_z();
-    double noisyAlt = trueAlt + m_altNoise(m_rng);
 
-    // Simple ISA pressure model: P = P0 * (1 - L*h/T0)^(g/(R*L))
-    constexpr double P0 = 101325.0;   // Pa sea level
-    constexpr double L  = 0.0065;     // lapse rate K/m
-    constexpr double T0 = 288.15;     // sea level temp K
-    constexpr double G  = 9.80665;
-    constexpr double R  = 287.05;     // specific gas constant
+    // Update slow bias drift (random walk)
+    m_baroBias += BIAS_DRIFT_RATE * std::sqrt(DT) * m_noise(m_rng);
+
+    // Noisy altitude = truth + bias + white noise
+    double noisyAlt = trueAlt + m_baroBias + ALT_NOISE_SIGMA * m_noise(m_rng);
+
+    // ISA pressure model: P = P0 * (1 - L*h/T0)^(g/(R*L))
+    constexpr double P0  = 101325.0;
+    constexpr double L   = 0.0065;
+    constexpr double T0  = 288.15;
+    constexpr double G   = 9.80665;
+    constexpr double R   = 287.05;
     constexpr double EXP = G / (R * L);
 
     double pressure = P0 * std::pow(1.0 - L * noisyAlt / T0, EXP);

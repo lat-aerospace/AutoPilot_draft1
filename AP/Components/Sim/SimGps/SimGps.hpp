@@ -16,9 +16,24 @@ class SimGps final : public SimGpsComponentBase {
     void truthStateIn_handler(FwIndexType portNum, Ap::AircraftState& state) override;
 
     Ap::AircraftState m_truth;
+
+    // -----------------------------------------------------------------
+    // GPS error parameters (tune these)
+    // -----------------------------------------------------------------
+    static constexpr double POS_NOISE_SIGMA = 1.5;    // [m] position noise 1-sigma
+    static constexpr double VEL_NOISE_SIGMA = 0.1;    // [m/s] velocity noise 1-sigma
+
+    // Measurement delay: ring buffer of past truth states
+    // At 10Hz, 3 samples = 300ms delay (typical consumer GPS)
+    static constexpr int GPS_DELAY_SAMPLES = 3;
+    // -----------------------------------------------------------------
+
+    Ap::AircraftState m_delayBuf[GPS_DELAY_SAMPLES];
+    int  m_delayIdx   = 0;
+    bool m_bufferFull = false;
+
     std::mt19937 m_rng{123};
-    std::normal_distribution<double> m_posNoise{0.0, 1.5};   // metres
-    std::normal_distribution<double> m_velNoise{0.0, 0.1};   // m/s
+    std::normal_distribution<double> m_noise{0.0, 1.0};
 };
 
 }  // namespace Ap

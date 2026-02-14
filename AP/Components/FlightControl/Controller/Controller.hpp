@@ -27,11 +27,11 @@ class Controller final : public ControllerComponentBase {
     Ap::AircraftState m_state;
 
     // Gains (tuned for Cessna 172 at ~50 m/s)
-    static constexpr double KP_HDG   = 0.08;   // heading err → desired roll (deg/deg)
-    static constexpr double KP_ROLL  = 0.005;  // roll err → aileron
-    static constexpr double KP_ALT   = 0.02;   // alt err → desired pitch (deg/m)
-    static constexpr double KP_PITCH = -0.008;   // pitch err → elevator
-    static constexpr double KP_SPD   = 0.01;   // speed err → throttle
+    static constexpr double KP_HDG   = 0.08;    // heading err → desired roll (deg/deg)
+    static constexpr double KP_ROLL  = 0.001;   // roll err → aileron (reduced: 5x more authority)
+    static constexpr double KP_ALT   = 0.02;    // alt err → desired pitch (deg/m)
+    static constexpr double KP_PITCH = -0.002;  // pitch err → elevator (negative: Cmde < 0)
+    static constexpr double KP_SPD   = 0.008;   // speed err → throttle
 };
 
 }  // namespace Ap

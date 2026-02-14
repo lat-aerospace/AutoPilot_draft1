@@ -46,7 +46,7 @@ void Controller::schedIn_handler(FwIndexType portNum, U32 context) {
 
     // --- Speed: airspeed error → throttle ---
     double spdErr = m_cmd.get_desired_airspeed_ms() - m_state.get_airspeed_ms();
-    double throttle = 0.5 + KP_SPD * spdErr;
+    double throttle = 0.6 + KP_SPD * spdErr;
     throttle = clamp(throttle, 0.0, 1.0);
 
     // --- Rudder: zero for now ---

@@ -4,6 +4,10 @@ register_fprime_library(
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/SimDynamics.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/RigidBody6DOF.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/AtmosphereISA.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/AeroModel.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/PropulsionModel.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/WindModel.cpp"
     DEPENDS
         AP_Types
         AP_Ports

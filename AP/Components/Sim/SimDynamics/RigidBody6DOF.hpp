@@ -1,6 +1,11 @@
 #pragma once
 
 #include "AP/Math/ApMath.hpp"
+#include "AircraftParams.hpp"
+#include "AtmosphereISA.hpp"
+#include "AeroModel.hpp"
+#include "PropulsionModel.hpp"
+#include "WindModel.hpp"
 
 namespace Sim {
 
@@ -25,7 +30,7 @@ namespace Idx {
 }
 
 // -------------------------------------------------------------------------
-// Surface command input
+// Surface command input (normalized, from autopilot)
 // -------------------------------------------------------------------------
 struct SurfaceInput {
     double aileron  = 0.0;   // -1 to +1
@@ -35,44 +40,11 @@ struct SurfaceInput {
 };
 
 // -------------------------------------------------------------------------
-// Simple aircraft constants — tune these, swap for real aero later
-// -------------------------------------------------------------------------
-struct SimpleAircraftParams {
-    // Mass & inertia
-    double mass   = 1043.0;   // kg (Cessna 172)
-    double Ixx    = 1285.0;   // kg*m^2
-    double Iyy    = 1825.0;   // kg*m^2
-    double Izz    = 2667.0;   // kg*m^2
-
-    // Propulsion
-    double maxThrust = 2000.0; // N
-    double dragCoeff = 0.40;   // N/(m/s)^2  — simple quadratic drag
-
-    // Lift — must balance weight at cruise speed
-    // Trim: liftCoeff = mass*g / V_cruise^2 = 10228/2500 = 4.09
-    double liftCoeff = 4.09;   // N/(m/s)^2
-
-    // Control surface moment gains (Nm per unit deflection)
-    double lAil  = 2000.0;    // roll moment per aileron
-    double mElev = 3000.0;    // pitch moment per elevator
-    double nRud  = 1500.0;    // yaw moment per rudder
-
-    // Angular rate damping (Nm per rad/s)
-    double dampP = 200.0;     // roll damping
-    double dampQ = 300.0;     // pitch damping
-    double dampR = 150.0;     // yaw damping
-
-    // Static stability (Nm per radian)
-    double pitchStiffness = 5000.0;  // Cma — restoring pitch moment per rad of alpha
-    double yawStiffness   = 2000.0;  // Cnb — weathercock restoring yaw moment per rad of beta
-};
-
-// -------------------------------------------------------------------------
-// RigidBody6DOF — 13-state 6-DOF integrator with simple force model
+// RigidBody6DOF — 13-state 6-DOF integrator with modular force model
 // -------------------------------------------------------------------------
 class RigidBody6DOF {
 public:
-    explicit RigidBody6DOF(const SimpleAircraftParams& params = {});
+    explicit RigidBody6DOF(const AircraftParams& params = {});
 
     /// Set surface commands (call before step)
     void setSurfaces(const SurfaceInput& cmd);
@@ -83,7 +55,7 @@ public:
     /// Reset to initial conditions (level flight, given airspeed & altitude)
     void reset(double airspeed_ms = 50.0, double altitude_m = 1000.0);
 
-    // --- Accessors ---
+    // --- Accessors (unchanged public API) ---
     const StateVec& state() const { return m_state; }
 
     Ap::Vec3d positionNED() const;
@@ -95,6 +67,9 @@ public:
     double    airspeed() const;
     double    simTime() const { return m_time; }
 
+    // --- Sub-model access (for configuration) ---
+    WindModel& wind() { return m_wind; }
+
 private:
     /// Compute state derivative given state and surfaces
     StateVec computeDerivative(const StateVec& s, const SurfaceInput& cmd) const;
@@ -105,10 +80,18 @@ private:
     /// Extract rotation matrix (body-from-NED) from quaternion in state
     static Ap::Mat3d dcmFromState(const StateVec& s);
 
-    SimpleAircraftParams m_params;
-    SurfaceInput         m_surfaces;
-    StateVec             m_state;
-    double               m_time = 0.0;
+    // Sub-models
+    AircraftParams    m_params;
+    AeroModel         m_aero;
+    PropulsionModel   m_prop;
+    WindModel         m_wind;
+
+    SurfaceInput      m_surfaces;
+    StateVec          m_state;
+    double            m_time = 0.0;
+
+    // Reference altitude for NED ↔ MSL conversion
+    static constexpr double REF_ALT = 1600.0;  // m MSL
 };
 
 }  // namespace Sim

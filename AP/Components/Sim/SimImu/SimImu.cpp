@@ -1,5 +1,6 @@
 #include "AP/Components/Sim/SimImu/SimImu.hpp"
 #include "AP/Math/ApMath.hpp"
+#include <cmath>
 
 namespace Ap {
 
@@ -15,29 +16,35 @@ SimImu::~SimImu() {}
 void SimImu::schedIn_handler(FwIndexType portNum, U32 context) {
     this->dispatchCurrentMessages();
 
-    // Compute true specific force in body frame:
-    // accel = (velocity_derivative + gravity) rotated to body frame
-    // For simplicity, use velocity as proxy and add gravity in NED then rotate
-    const auto vel = m_truth.get_velocity_ned();
     const auto quat = m_truth.get_attitude_quat();
     const auto rate = m_truth.get_angular_rate_dps();
 
-    // True accel ≈ gravity in body frame (simplified — full model would difference velocities)
-    // Rotate gravity [0, 0, 9.81] from NED to body using quaternion inverse
+    // Rotate gravity [0, 0, 9.81] from NED to body frame
     Ap::Quatd q(quat.get_w(), quat.get_x(), quat.get_y(), quat.get_z());
     q.normalize();
     Ap::Vec3d gravNED(0.0, 0.0, Ap::GRAVITY);
     Ap::Vec3d gravBody = q.inverse() * gravNED;
 
-    // Sensed accel = -gravBody (accelerometer at rest reads +1g upward)
-    double ax = -gravBody.x() + m_accelNoise(m_rng);
-    double ay = -gravBody.y() + m_accelNoise(m_rng);
-    double az = -gravBody.z() + m_accelNoise(m_rng);
+    // --- Update bias random walk ---
+    const double sqrt_dt = std::sqrt(DT);
+    for (int i = 0; i < 3; i++) {
+        m_accelBias[i] += ACCEL_BIAS_WALK * sqrt_dt * m_noise(m_rng);
+        m_gyroBias[i]  += GYRO_BIAS_WALK  * sqrt_dt * m_noise(m_rng);
+    }
 
-    // Gyro = true angular rate + noise
-    double gx = rate.get_x() + m_gyroNoise(m_rng);
-    double gy = rate.get_y() + m_gyroNoise(m_rng);
-    double gz = rate.get_z() + m_gyroNoise(m_rng);
+    // --- Accelerometer: truth + bias + noise ---
+    // Sensed accel = -gravBody (at rest reads +1g upward)
+    double ax = -gravBody.x() + m_accelBias[0] + ACCEL_NOISE_SIGMA * m_noise(m_rng);
+    double ay = -gravBody.y() + m_accelBias[1] + ACCEL_NOISE_SIGMA * m_noise(m_rng);
+    double az = -gravBody.z() + m_accelBias[2] + ACCEL_NOISE_SIGMA * m_noise(m_rng);
+
+    // --- Gyroscope: truth * (1 + scale_error) + bias + noise ---
+    double gx = rate.get_x() * (1.0 + GYRO_SCALE_ERR) + m_gyroBias[0]
+                + GYRO_NOISE_SIGMA * m_noise(m_rng);
+    double gy = rate.get_y() * (1.0 + GYRO_SCALE_ERR) + m_gyroBias[1]
+                + GYRO_NOISE_SIGMA * m_noise(m_rng);
+    double gz = rate.get_z() * (1.0 + GYRO_SCALE_ERR) + m_gyroBias[2]
+                + GYRO_NOISE_SIGMA * m_noise(m_rng);
 
     Ap::ImuData imu;
     imu.set_accel_mps2(Ap::Vec3(ax, ay, az));
