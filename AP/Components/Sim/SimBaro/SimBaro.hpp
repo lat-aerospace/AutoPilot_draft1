@@ -20,8 +20,8 @@ class SimBaro final : public SimBaroComponentBase {
     // -----------------------------------------------------------------
     // Baro error parameters (tune these)
     // -----------------------------------------------------------------
-    static constexpr double ALT_NOISE_SIGMA = 0.5;     // [m] white noise per sample
-    static constexpr double BIAS_DRIFT_RATE = 0.001;   // [m] per sqrt(s) — slow random walk
+    static constexpr double ALT_NOISE_SIGMA = 1e-4;//0.5;     // [m] white noise per sample
+    static constexpr double BIAS_DRIFT_RATE = 1e-6;//0.001;   // [m] per sqrt(s) — slow random walk
     static constexpr double DT = 0.02;                  // 50 Hz
     // -----------------------------------------------------------------
 

@@ -20,8 +20,8 @@ class SimGps final : public SimGpsComponentBase {
     // -----------------------------------------------------------------
     // GPS error parameters (tune these)
     // -----------------------------------------------------------------
-    static constexpr double POS_NOISE_SIGMA = 1.5;    // [m] position noise 1-sigma
-    static constexpr double VEL_NOISE_SIGMA = 0.1;    // [m/s] velocity noise 1-sigma
+    static constexpr double POS_NOISE_SIGMA = 1e-4;//1.5;    // [m] position noise 1-sigma
+    static constexpr double VEL_NOISE_SIGMA = 1e-6;//0.1;    // [m/s] velocity noise 1-sigma
 
     // Measurement delay: ring buffer of past truth states
     // At 10Hz, 3 samples = 300ms delay (typical consumer GPS)

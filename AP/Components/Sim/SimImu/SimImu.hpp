@@ -21,8 +21,8 @@ class SimImu final : public SimImuComponentBase {
     // IMU error parameters (tune these)
     // -----------------------------------------------------------------
     // White noise (zero-mean Gaussian per sample)
-    static constexpr double ACCEL_NOISE_SIGMA = 0.05;   // [m/s^2] per sample
-    static constexpr double GYRO_NOISE_SIGMA  = 0.05;   // [deg/s] per sample
+    static constexpr double ACCEL_NOISE_SIGMA = 1e-6;//0.05;   // [m/s^2] per sample
+    static constexpr double GYRO_NOISE_SIGMA  = 1e-6;//0.05;   // [deg/s] per sample
 
     // Bias random walk (slow drift over time)
     static constexpr double ACCEL_BIAS_WALK = 0.0005;   // [m/s^2] per sqrt(s)

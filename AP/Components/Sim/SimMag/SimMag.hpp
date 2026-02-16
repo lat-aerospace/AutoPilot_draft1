@@ -31,7 +31,7 @@ class SimMag final : public SimMagComponentBase {
     static constexpr double SOFT_IRON_Y = 0.98;
     static constexpr double SOFT_IRON_Z = 1.01;
 
-    static constexpr double MAG_NOISE_SIGMA = 0.005;  // [gauss] white noise 1-sigma
+    static constexpr double MAG_NOISE_SIGMA = 1e-6;//0.005;  // [gauss] white noise 1-sigma
     // -----------------------------------------------------------------
 
     std::mt19937 m_rng{99};
