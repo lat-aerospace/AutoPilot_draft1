@@ -17,9 +17,17 @@ module Ap {
         async input port baroIn: Ap.BaroPort
         async input port magIn: Ap.MagPort
 
+        # ------------------------------------------------------------------
+        # Live-tuning commands
+        # ------------------------------------------------------------------
+
+        @ Set Mahony filter proportional and integral gains
+        sync command SetMahonyGains(kp: F32, ki: F32)
+
         @ Estimated state output fan-out:
-        @ [0] = Controller, [1] = Autonomy, [2] = MavlinkGateway
-        output port stateOut: [3] Ap.StatePort
+        @ [0] = NavController, [1] = AttitudeController, [2] = RateController
+        @ [3] = Autonomy,      [4] = MavlinkGateway,     [5] = FlightLogger
+        output port stateOut: [6] Ap.StatePort
 
         # ----------------------------------------------------------------------
         # Telemetry
@@ -43,6 +51,15 @@ module Ap {
         # ----------------------------------------------------------------------
         # Standard AC Ports
         # ----------------------------------------------------------------------
+
+        @ Port for receiving commands
+        command recv port CmdDisp
+
+        @ Port for sending command registration requests
+        command reg port CmdReg
+
+        @ Port for sending command responses
+        command resp port CmdStatus
 
         time get port timeCaller
 

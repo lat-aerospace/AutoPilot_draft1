@@ -1,8 +1,8 @@
 module Ap {
 
     @ Autonomy — flight mode manager and guidance command generator.
-    @ FBWB: maps RC sticks to GuidanceCmd.
-    @ Auto: waypoints + state → GuidanceCmd (future).
+    @ FBWB: maps RC sticks to integrated GuidanceCmd.
+    @ AUTO: follows mission waypoints via AP_Mission.
     queued component Autonomy {
 
         # ----------------------------------------------------------------------
@@ -18,11 +18,21 @@ module Ap {
         @ Estimated aircraft state (async — from StateEstimator)
         async input port stateIn: Ap.StatePort
 
-        @ Guidance command output (to Controller)
-        output port guidanceCmdOut: Ap.GuidanceCmdPort
+        @ Guidance command output [0]=NavController [1]=FlightLogger
+        output port guidanceCmdOut: [2] Ap.GuidanceCmdPort
 
         @ Current mode broadcast [0]=MavlinkGateway
         output port modeOut: [1] Ap.ModePort
+
+        # ----------------------------------------------------------------------
+        # Live-tuning commands (mission management + mode control)
+        # ----------------------------------------------------------------------
+
+        @ Add a waypoint to the mission
+        sync command AddWaypoint(lat: F64, lon: F64, alt: F32, speed: F32)
+
+        @ Clear all waypoints and return to FBWB mode
+        sync command ClearMission()
 
         # ----------------------------------------------------------------------
         # Telemetry
@@ -40,9 +50,21 @@ module Ap {
         @ Desired heading (deg)
         telemetry desHeading: F64
 
+        @ Waypoint count in mission
+        telemetry wpCount: U16
+
         # ----------------------------------------------------------------------
         # Standard AC Ports
         # ----------------------------------------------------------------------
+
+        @ Port for receiving commands
+        command recv port CmdDisp
+
+        @ Port for sending command registration requests
+        command reg port CmdReg
+
+        @ Port for sending command responses
+        command resp port CmdStatus
 
         time get port timeCaller
 

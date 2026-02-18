@@ -87,7 +87,21 @@ module Sitl {
   instance autonomy: Ap.Autonomy base id 0x10041000 \
     queue size 20
 
-  instance controller: Ap.Controller base id 0x10042000 \
+  # Controller split into 3 components (one per control loop rate)
+  # navController:      10Hz  (RG4) — TECS + L1 → DesiredAttitude
+  # attitudeController: 50Hz  (RG3) — attitude error → DesiredRates
+  # rateController:    100Hz  (RG2) — rate PID → SurfaceCmd
+
+  instance navController: Ap.NavController base id 0x10042000 \
+    queue size 20
+
+  instance attitudeController: Ap.AttitudeController base id 0x10044000 \
+    queue size 20
+
+  instance rateController: Ap.RateController base id 0x10045000 \
+    queue size 20
+
+  instance flightLogger: Ap.FlightLogger base id 0x10046000 \
     queue size 20
 
   # ----------------------------------------------------------------------
