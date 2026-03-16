@@ -1,11 +1,15 @@
 #include "AP/Components/Mavlink/MavlinkGateway/MavlinkGateway.hpp"
 #include "AP/Math/ApMath.hpp"
 
+#if !defined(TGT_OS_TYPE_FREERTOS)
+// POSIX / Linux (SITL builds)
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
+#endif
+
 #include <cmath>
 #include <cstring>
 
@@ -37,15 +41,24 @@ MavlinkGateway::MavlinkGateway(const char* const compName)
 }
 
 MavlinkGateway::~MavlinkGateway() {
+#if !defined(TGT_OS_TYPE_FREERTOS)
     if (m_sockFd >= 0) {
         ::close(m_sockFd);
     }
+#endif
 }
 
 // -------------------------------------------------------------------------
 // configure — open UDP socket, set target address, bind for recv
 // -------------------------------------------------------------------------
 void MavlinkGateway::configure(const char* targetIp, U16 targetPort, U16 bindPort) {
+#if defined(TGT_OS_TYPE_FREERTOS)
+    // No POSIX sockets on bare-metal.
+    // On STM32 the MAVLink transport is UART-based; this UDP path is
+    // only used in SITL.  Mark socket as invalid so schedIn is a no-op.
+    (void)targetIp; (void)targetPort; (void)bindPort;
+    m_sockFd = -1;
+#else
     m_sockFd = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (m_sockFd < 0) {
         this->log_WARNING_HI_MavlinkSocketFailed(errno);
@@ -76,6 +89,7 @@ void MavlinkGateway::configure(const char* targetIp, U16 targetPort, U16 bindPor
     inet_pton(AF_INET, targetIp, &m_targetAddr.sin_addr);
 
     this->log_ACTIVITY_HI_MavlinkSocketOpened();
+#endif
 }
 
 // -------------------------------------------------------------------------
@@ -122,6 +136,10 @@ void MavlinkGateway::modeIn_handler(FwIndexType portNum, const Ap::FlightMode& m
 // recvMavlink — non-blocking recv, parse all available MAVLink messages
 // -------------------------------------------------------------------------
 void MavlinkGateway::recvMavlink() {
+#if defined(TGT_OS_TYPE_FREERTOS)
+    // No POSIX sockets on bare-metal; UART-based receive is handled
+    // by a separate STM32-specific component.
+#else
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     struct sockaddr_in srcAddr;
     socklen_t srcLen = sizeof(srcAddr);
@@ -149,6 +167,7 @@ void MavlinkGateway::recvMavlink() {
             }
         }
     }
+#endif
 }
 
 // -------------------------------------------------------------------------
@@ -289,6 +308,97 @@ void MavlinkGateway::handleMessage(const mavlink_message_t& msg) {
             }
             break;
         }
+        case MAVLINK_MSG_ID_SET_MODE: {
+            mavlink_set_mode_t sm;
+            mavlink_msg_set_mode_decode(&msg, &sm);
+
+            // custom_mode: 0=FBWB, 1=AUTO (matches our FlightMode enum)
+            Ap::FlightMode newMode = (sm.custom_mode == 1)
+                                     ? Ap::FlightMode::AUTO
+                                     : Ap::FlightMode::FBWB;
+
+            if (this->isConnected_modeCommandOut_OutputPort(0)) {
+                this->modeCommandOut_out(0, newMode);
+            }
+            break;
+        }
+        case MAVLINK_MSG_ID_MISSION_COUNT: {
+            mavlink_mission_count_t mc;
+            mavlink_msg_mission_count_decode(&msg, &mc);
+
+            m_missionCount = mc.count;
+            m_missionReceived = 0;
+
+            // ACK by requesting the first waypoint
+            if (m_missionCount > 0) {
+                mavlink_message_t req;
+                mavlink_msg_mission_request_int_pack(
+                    SYS_ID, COMP_ID, &req,
+                    msg.sysid, msg.compid,
+                    0,  // first waypoint seq
+                    MAV_MISSION_TYPE_MISSION
+                );
+                sendMavlinkMsg(req);
+            }
+            break;
+        }
+        case MAVLINK_MSG_ID_MISSION_ITEM_INT: {
+            mavlink_mission_item_int_t mi;
+            mavlink_msg_mission_item_int_decode(&msg, &mi);
+
+            // Forward waypoint to Autonomy
+            Ap::MissionWaypoint wp;
+            wp.set_seq(mi.seq);
+            wp.set_lat_deg(static_cast<double>(mi.x) * 1e-7);  // degE7 → deg
+            wp.set_lon_deg(static_cast<double>(mi.y) * 1e-7);
+            wp.set_alt_msl_m(mi.z);
+            wp.set_speed_ms(mi.param1 > 0.0f ? mi.param1 : 50.0f);  // default 50 m/s
+
+            if (this->isConnected_missionWaypointOut_OutputPort(0)) {
+                this->missionWaypointOut_out(0, wp);
+            }
+
+            m_missionReceived++;
+
+            // ACK this item
+            mavlink_message_t ack;
+            mavlink_msg_mission_ack_pack(
+                SYS_ID, COMP_ID, &ack,
+                msg.sysid, msg.compid,
+                MAV_MISSION_ACCEPTED,
+                MAV_MISSION_TYPE_MISSION,
+                0  // opaque_id
+            );
+
+            if (m_missionReceived < m_missionCount) {
+                // Request next waypoint
+                mavlink_message_t req;
+                mavlink_msg_mission_request_int_pack(
+                    SYS_ID, COMP_ID, &req,
+                    msg.sysid, msg.compid,
+                    m_missionReceived,
+                    MAV_MISSION_TYPE_MISSION
+                );
+                sendMavlinkMsg(req);
+            } else {
+                // All waypoints received — send final ACK
+                sendMavlinkMsg(ack);
+            }
+            break;
+        }
+        case MAVLINK_MSG_ID_MISSION_REQUEST_LIST: {
+            // GCS asks how many waypoints we have — respond with our count
+            mavlink_message_t resp;
+            mavlink_msg_mission_count_pack(
+                SYS_ID, COMP_ID, &resp,
+                msg.sysid, msg.compid,
+                m_missionCount,
+                MAV_MISSION_TYPE_MISSION,
+                0  // opaque_id
+            );
+            sendMavlinkMsg(resp);
+            break;
+        }
         default:
             this->log_ACTIVITY_LO_MavMsgReceived(msg.msgid);
             break;
@@ -302,9 +412,14 @@ void MavlinkGateway::sendMavlinkMsg(const mavlink_message_t& msg) {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
 
+#if defined(TGT_OS_TYPE_FREERTOS)
+    // Bare-metal: UART-based send would go here.
+    (void)buf; (void)len;
+#else
     ::sendto(m_sockFd, buf, len, 0,
              reinterpret_cast<const struct sockaddr*>(&m_targetAddr),
              sizeof(m_targetAddr));
+#endif
     m_msgsSent++;
 }
 
@@ -362,14 +477,9 @@ void MavlinkGateway::sendTelemetry() {
 
     // --- GLOBAL_POSITION_INT ---
     {
-        constexpr double REF_LAT = 35.0;
-        constexpr double REF_LON = -106.0;
-        constexpr double REF_ALT = 1600.0;
-        constexpr double R_EARTH = 6378137.0;
-
-        double lat = REF_LAT + (pos.get_x() / R_EARTH) * Ap::RAD2DEG;
-        double lon = REF_LON + (pos.get_y() / (R_EARTH * std::cos(REF_LAT * Ap::DEG2RAD))) * Ap::RAD2DEG;
-        double altMsl = REF_ALT - pos.get_z();
+        double lat = Ap::REF_LAT_DEG + (pos.get_x() / Ap::R_EARTH) * Ap::RAD2DEG;
+        double lon = Ap::REF_LON_DEG + (pos.get_y() / (Ap::R_EARTH * std::cos(Ap::REF_LAT_RAD))) * Ap::RAD2DEG;
+        double altMsl = Ap::REF_ALT_MSL - pos.get_z();
 
         mavlink_message_t msg;
         mavlink_msg_global_position_int_pack(
@@ -389,8 +499,7 @@ void MavlinkGateway::sendTelemetry() {
 
     // --- VFR_HUD ---
     {
-        constexpr double REF_ALT = 1600.0;
-        double altMsl = REF_ALT - pos.get_z();
+        double altMsl = Ap::REF_ALT_MSL - pos.get_z();
 
         mavlink_message_t msg;
         mavlink_msg_vfr_hud_pack(
@@ -415,6 +524,37 @@ void MavlinkGateway::sendTelemetry() {
             75, 0, 0, 0
         );
         sendMavlinkMsg(msg);
+    }
+
+    // --- NAMED_VALUE_FLOAT: internal debug variables ---
+    // These appear in Mission Planner's Status tab
+    {
+        uint32_t timeBootMs = static_cast<uint32_t>(m_state.get_time_s() * 1000.0);
+        double altMsl = Ap::REF_ALT_MSL - pos.get_z();
+
+        auto sendNamedFloat = [&](const char* name, float value) {
+            mavlink_message_t msg;
+            mavlink_msg_named_value_float_pack(
+                SYS_ID, COMP_ID, &msg,
+                timeBootMs, name, value
+            );
+            sendMavlinkMsg(msg);
+        };
+
+        sendNamedFloat("posN",    static_cast<float>(pos.get_x()));
+        sendNamedFloat("posE",    static_cast<float>(pos.get_y()));
+        sendNamedFloat("altMSL",  static_cast<float>(altMsl));
+        sendNamedFloat("roll",    static_cast<float>(euler.get_x()));
+        sendNamedFloat("pitch",   static_cast<float>(euler.get_y()));
+        sendNamedFloat("heading", static_cast<float>(euler.get_z()));
+        sendNamedFloat("ias",     static_cast<float>(m_state.get_airspeed_ms()));
+        sendNamedFloat("velN",    static_cast<float>(vel.get_x()));
+        sendNamedFloat("velE",    static_cast<float>(vel.get_y()));
+        sendNamedFloat("velD",    static_cast<float>(vel.get_z()));
+        sendNamedFloat("mode",    static_cast<float>(m_mode));
+        sendNamedFloat("rcRoll",  m_rcRoll);
+        sendNamedFloat("rcPitch", m_rcPitch);
+        sendNamedFloat("rcThr",   m_rcThrottle);
     }
 }
 

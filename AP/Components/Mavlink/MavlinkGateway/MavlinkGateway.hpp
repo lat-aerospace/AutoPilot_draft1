@@ -4,7 +4,52 @@
 #include "AP/Components/Mavlink/MavlinkGateway/MavlinkGatewayComponentAc.hpp"
 
 #include <common/mavlink.h>
+
+#if defined(TGT_OS_TYPE_FREERTOS)
+// -----------------------------------------------------------------------
+// Bare-metal (STM32 / FreeRTOS) — no POSIX sockets.
+// Provide minimal BSD-socket type stubs so the class declaration compiles,
+// and byte-order helpers using GCC built-ins (Cortex-M is little-endian).
+// -----------------------------------------------------------------------
+#include <cstdint>
+
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+
+#ifndef INADDR_ANY
+#define INADDR_ANY static_cast<uint32_t>(0x00000000)
+#endif
+
+struct in_addr {
+    uint32_t s_addr;
+};
+
+struct sockaddr_in {
+    uint16_t sin_family;
+    uint16_t sin_port;
+    struct in_addr sin_addr;
+    char     sin_zero[8];
+};
+
+struct sockaddr {
+    uint16_t sa_family;
+    char     sa_data[14];
+};
+
+using socklen_t = uint32_t;
+
+#include <sys/types.h>  // ssize_t from newlib
+
+inline uint16_t htons(uint16_t x) { return __builtin_bswap16(x); }
+inline uint32_t htonl(uint32_t x) { return __builtin_bswap32(x); }
+inline uint16_t ntohs(uint16_t x) { return __builtin_bswap16(x); }
+inline uint32_t ntohl(uint32_t x) { return __builtin_bswap32(x); }
+
+#else
+// POSIX / Linux (SITL builds)
 #include <netinet/in.h>
+#endif
 
 namespace Ap {
 
@@ -80,6 +125,10 @@ class MavlinkGateway final : public MavlinkGatewayComponentBase {
     // MAVLink parser state
     mavlink_message_t m_rxMsg;
     mavlink_status_t  m_rxStatus;
+
+    // Mission upload state
+    uint16_t m_missionCount = 0;      // expected waypoint count from GCS
+    uint16_t m_missionReceived = 0;   // number of waypoints received so far
 
     // MAVLink system/component ID
     static constexpr uint8_t SYS_ID  = 1;

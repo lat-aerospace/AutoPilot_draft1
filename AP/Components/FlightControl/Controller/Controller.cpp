@@ -1,4 +1,5 @@
 #include "AP/Components/FlightControl/Controller/Controller.hpp"
+#include "AP/Math/ApMath.hpp"
 #include <cmath>
 
 namespace Ap {
@@ -6,7 +7,7 @@ namespace Ap {
 Controller::Controller(const char* const compName)
     : ControllerComponentBase(compName)
 {
-    // Default guidance: hold initial conditions (2600m MSL, 50 m/s, heading north)
+    // Default guidance: hold initial conditions (2000m MSL, 50 m/s, heading north)
     m_cmd.set_desired_alt_m(2000.0);
     m_cmd.set_desired_airspeed_ms(50.0);
     m_cmd.set_desired_heading_deg(0.0);
@@ -20,33 +21,30 @@ Controller::~Controller() {}
 void Controller::schedIn_handler(FwIndexType portNum, U32 context) {
     this->dispatchCurrentMessages();
 
+    constexpr double DT = 0.01;  // 100Hz
+
     // --- Lateral: heading → roll → aileron ---
     double hdgErr = wrapDeg(m_cmd.get_desired_heading_deg() -
                             m_state.get_euler_deg().get_z());
 
-    double desRoll = KP_HDG * hdgErr;
-    desRoll = clamp(desRoll, -30.0, 30.0);  // max bank 30°
+    double desRoll = m_pidHeading.update(hdgErr, DT);
 
     double rollErr = desRoll - m_state.get_euler_deg().get_x();
-    double aileron = KP_ROLL * rollErr;
-    aileron = clamp(aileron, -1.0, 1.0);
+    double aileron = m_pidRoll.update(rollErr, DT);
 
     // --- Longitudinal: altitude → pitch → elevator ---
     // position_ned.z is posD; alt_MSL = ref_alt - posD
-    constexpr double REF_ALT = 1600.0;
-    double estAltMsl = REF_ALT - m_state.get_position_ned().get_z();
+    double estAltMsl = Ap::REF_ALT_MSL - m_state.get_position_ned().get_z();
     double altErr = m_cmd.get_desired_alt_m() - estAltMsl;
 
-    double desPitch = KP_ALT * altErr;
-    desPitch = clamp(desPitch, -15.0, 15.0);  // max pitch ±15°
+    double desPitch = m_pidAlt.update(altErr, DT);
 
     double pitchErr = desPitch - m_state.get_euler_deg().get_y();
-    double elevator = KP_PITCH * pitchErr;
-    elevator = clamp(elevator, -1.0, 1.0);
+    double elevator = m_pidPitch.update(pitchErr, DT);
 
     // --- Speed: airspeed error → throttle ---
     double spdErr = m_cmd.get_desired_airspeed_ms() - m_state.get_airspeed_ms();
-    double throttle = 0.5 + KP_SPD * spdErr;
+    double throttle = 0.5 + m_pidSpeed.update(spdErr, DT);
     throttle = clamp(throttle, 0.0, 1.0);
 
     // --- Rudder: zero for now ---

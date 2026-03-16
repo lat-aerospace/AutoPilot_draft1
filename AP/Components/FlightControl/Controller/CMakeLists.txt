@@ -5,5 +5,6 @@ set(SOURCE_FILES
 set(MOD_DEPS
     AP_Types
     AP_Ports
+    Ap_Math
 )
 register_fprime_module()

@@ -44,6 +44,54 @@
         "cacheVariables": {
             "FPRIME_DEPLOYMENT": "${sourceDir}/AP/Top/Sitl"
         }
+      },
+      {
+        "name": "stm32h7",
+        "displayName": "STM32H7 Hardware Deployment",
+        "description": "Cross-compile for STM32H7xx (Cortex-M7 @ 480 MHz) with FreeRTOS",
+        "binaryDir": "${sourceDir}/build-stm32h7",
+        "generator": "Ninja",
+        "environment": {
+          "VIRTUAL_ENV": "${fileDir}/fprime-venv",
+          "PATH": "$env{VIRTUAL_ENV}/bin:$penv{PATH}"
+        },
+        "cacheVariables": {
+            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/stm32h7_toolchain.cmake",
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+            "FPRIME_PLATFORM": "stm32h7",
+            "FPRIME_PLATFORM_CMAKE_PATH": "${sourceDir}/cmake/platform",
+            "FPRIME_DEPLOYMENT": "${sourceDir}/AP/Top/Stm32"
+        }
+      },
+      {
+        "name": "stm32h7-debug",
+        "inherits": "stm32h7",
+        "displayName": "STM32H7 Debug Build",
+        "description": "Cross-compile for STM32H7 with debug symbols and stack checking",
+        "binaryDir": "${sourceDir}/build-stm32h7-debug",
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug"
+        }
+      },
+      {
+        "name": "stm32f4",
+        "displayName": "STM32F4 Hardware Deployment",
+        "description": "Cross-compile for STM32F4xx (Cortex-M4F @ 168 MHz) with FreeRTOS",
+        "binaryDir": "${sourceDir}/build-stm32f4",
+        "generator": "Ninja",
+        "environment": {
+          "VIRTUAL_ENV": "${fileDir}/fprime-venv",
+          "PATH": "$env{VIRTUAL_ENV}/bin:$penv{PATH}"
+        },
+        "cacheVariables": {
+            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/stm32f4_toolchain.cmake",
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+            "FPRIME_PLATFORM": "stm32f4",
+            "FPRIME_PLATFORM_CMAKE_PATH": "${sourceDir}/cmake/platform",
+            "FPRIME_DEPLOYMENT": "${sourceDir}/AP/Top/Stm32"
+        }
       }
   ]
 }

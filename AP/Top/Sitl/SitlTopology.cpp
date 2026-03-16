@@ -62,9 +62,9 @@ void setupTopology(const TopologyState& state) {
     configureTopology();
 
     // Open MAVLink UDP socket
-    // Send telemetry to MissionPlanner on 127.0.0.1:14550
-    // Receive on 0.0.0.0:14540
-    mavlinkGateway.configure("127.0.0.1", 14550, 14540);
+    // Send telemetry to GCS (default 127.0.0.1:14550), receive on 0.0.0.0:14540
+    const char* mavIp = (state.hostname != nullptr) ? state.hostname : "127.0.0.1";
+    mavlinkGateway.configure(mavIp, 14550, 14540);
 
     loadParameters();
     startTasks(state);

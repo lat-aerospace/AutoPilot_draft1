@@ -1,6 +1,12 @@
 #include "AP/Components/FlightControl/StateEstimator/StateEstimator.hpp"
 #include "AP/Math/ApMath.hpp"
+
+#define _USE_MATH_DEFINES
 #include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace Ap {
 
@@ -88,18 +94,13 @@ void StateEstimator::schedIn_handler(FwIndexType portNum, U32 context) {
     m_velD = m_gps.get_vel_ned_mps().get_z();
 
     // Altitude from baro (negative of posD in NED)
-    // Reference altitude is 1600m MSL (same as sim)
-    constexpr double REF_ALT = 1600.0;
-    m_posD = -(m_baro.get_altitude_m() - REF_ALT);
+    m_posD = -(m_baro.get_altitude_m() - Ap::REF_ALT_MSL);
 
     // Horizontal position from GPS: convert lat/lon to NED offset from reference
-    constexpr double REF_LAT = 35.0;   // deg
-    constexpr double REF_LON = -106.0; // deg
-    double dLat = (m_gps.get_lat_deg() - REF_LAT) * Ap::DEG2RAD;
-    double dLon = (m_gps.get_lon_deg() - REF_LON) * Ap::DEG2RAD;
-    constexpr double R_EARTH = 6378137.0;
-    m_posN = dLat * R_EARTH;
-    m_posE = dLon * R_EARTH * std::cos(REF_LAT * Ap::DEG2RAD);
+    double dLat = (m_gps.get_lat_deg() - Ap::REF_LAT_DEG) * Ap::DEG2RAD;
+    double dLon = (m_gps.get_lon_deg() - Ap::REF_LON_DEG) * Ap::DEG2RAD;
+    m_posN = dLat * Ap::R_EARTH;
+    m_posE = dLon * Ap::R_EARTH * std::cos(Ap::REF_LAT_RAD);
 
     // Airspeed from velocity magnitude (simplified — no wind model yet)
     double airspeed = std::sqrt(m_velN * m_velN + m_velE * m_velE + m_velD * m_velD);

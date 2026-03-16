@@ -20,6 +20,12 @@ module Ap {
         @ Current mode input (from Autonomy, for telemetry)
         async input port modeIn: Ap.ModePort
 
+        @ Mission waypoint output (to Autonomy)
+        output port missionWaypointOut: Ap.MissionWaypointPort
+
+        @ Mode command output (to Autonomy, for SET_MODE)
+        output port modeCommandOut: Ap.ModePort
+
         # ----------------------------------------------------------------------
         # Telemetry
         # ----------------------------------------------------------------------

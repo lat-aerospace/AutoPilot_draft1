@@ -138,6 +138,10 @@ module Sitl {
 
       # Autonomy → MavlinkGateway (mode for heartbeat)
       autonomy.modeOut[0] -> mavlinkGateway.modeIn
+
+      # MavlinkGateway → Autonomy (mission waypoints + mode commands)
+      mavlinkGateway.missionWaypointOut -> autonomy.missionWaypointIn
+      mavlinkGateway.modeCommandOut -> autonomy.modeCommandIn
     }
 
     # ----------------------------------------------------------------------

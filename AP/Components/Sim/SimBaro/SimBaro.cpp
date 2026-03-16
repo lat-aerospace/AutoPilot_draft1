@@ -1,4 +1,5 @@
 #include "AP/Components/Sim/SimBaro/SimBaro.hpp"
+#include "AP/Math/ApMath.hpp"
 
 namespace Ap {
 
@@ -16,11 +17,8 @@ void SimBaro::schedIn_handler(FwIndexType portNum, U32 context) {
 
     const auto pos = m_truth.get_position_ned();
 
-    // Reference altitude (same as SimGps)
-    constexpr double REF_ALT = 1600.0;  // metres MSL
-
     // True altitude MSL = ref_alt - posD (NED down is negative altitude)
-    double trueAlt = REF_ALT - pos.get_z();
+    double trueAlt = Ap::REF_ALT_MSL - pos.get_z();
     double noisyAlt = trueAlt + m_altNoise(m_rng);
 
     // Simple ISA pressure model: P = P0 * (1 - L*h/T0)^(g/(R*L))

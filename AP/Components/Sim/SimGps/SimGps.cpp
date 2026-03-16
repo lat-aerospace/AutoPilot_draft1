@@ -24,12 +24,8 @@ void SimGps::schedIn_handler(FwIndexType portNum, U32 context) {
     double nE = pos.get_y() + m_posNoise(m_rng);
     double nD = pos.get_z() + m_posNoise(m_rng);
 
-    // Convert noisy NED to LLA (reference: origin at 0,0,0 in rad,rad,m)
-    // Using a fixed reference point (e.g. mid-US)
-    constexpr double REF_LAT = 35.0 * Ap::DEG2RAD;  // ~35 deg N
-    constexpr double REF_LON = -106.0 * Ap::DEG2RAD; // ~106 deg W
-    constexpr double REF_ALT = 1600.0;               // ~1600 m MSL
-    Ap::Vec3d refLla(REF_LAT, REF_LON, REF_ALT);
+    // Convert noisy NED to LLA using centralized reference datum
+    Ap::Vec3d refLla(Ap::REF_LAT_RAD, Ap::REF_LON_RAD, Ap::REF_ALT_MSL);
     Ap::Vec3d ned(nN, nE, nD);
     Ap::Vec3d lla = Ap::llaFromNed(refLla, ned);
 
